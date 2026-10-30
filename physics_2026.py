@@ -344,7 +344,7 @@ def _solve_qss_velocity_profile(
 
             f_tire_brake_max = r_long * mu_long_i * fz
             f_brake_total = f_tire_brake_max + f_drag + f_grade
-            a_decel = max(0.1, f_brake_total / m)
+            a_decel = min(5.35 * g, max(0.1, f_brake_total / m))
 
             v_allow = np.sqrt(v_next**2 + 2.0 * a_decel * ds)
             v[i] = min(v[i], v_allow)
@@ -384,7 +384,7 @@ def _solve_qss_velocity_profile(
             f_powertrain = p_wheel_w / max(12.0, v_curr)
 
             f_drive = min(f_traction_max, f_powertrain) - f_drag - f_roll - f_grade
-            a_accel = f_drive / m
+            a_accel = min(1.75 * g, max(0.01, f_drive / m))
             v_next_sq = max(100.0, v_curr**2 + 2.0 * a_accel * ds)
             v[i + 1] = min(v[i + 1], np.sqrt(v_next_sq))
         v[0] = min(v[0], v[-1])
@@ -441,7 +441,7 @@ def simulate_brazil_2026_lap(
 
     # Longitudinal and lateral accelerations [G]
     dv_dt = v_ms * np.gradient(v_ms, s)
-    long_g = gaussian_filter1d(dv_dt / g, sigma=3.5, mode="nearest")
+    long_g = np.clip(gaussian_filter1d(dv_dt / g, sigma=3.5, mode="nearest"), -5.40, 1.75)
     lat_g = gaussian_filter1d(((v_ms ** 2) * kappa) / g, sigma=3.5, mode="nearest")
     total_g = np.hypot(long_g, lat_g)
 
