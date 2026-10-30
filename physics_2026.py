@@ -528,97 +528,89 @@ def simulate_brazil_2026_lap(
     aero_balance_pct = bal_z + (bal_x - bal_z) * x_mode_fraction - 0.15 * long_g
     aero_balance_pct = np.clip(aero_balance_pct, 41.0, 46.2)
 
-    # 2026 Power Unit & Low-SOC Superclipping State Machine
+    # 2026 Power Unit Energy Management & Optimal Strategy Solver
     ice_max_kw = float(pu["ice_max_power_kw"])
     ice_power_kw = ice_max_kw * np.power(throttle_pct / 100.0, 1.15)
     ice_power_kw[throttle_pct < 2.0] = 0.0
 
+    eta_deploy = float(pu.get("es_deploy_efficiency", 0.96))
+    eta_harvest = float(pu.get("es_harvest_efficiency", 0.92))
+    soc_0 = float(pu.get("soc_initial_mj", 3.85))
+    soc_min = float(pu.get("soc_min_mj", 0.0))
+    soc_max = float(pu.get("soc_max_mj", 4.0))
+    recharge_max = float(pu.get("max_recharge_per_lap_mj", 7.0))
+    dt_arr = np.gradient(t)
+
     mguk_power_kw = np.zeros_like(s)
     mguk_state = np.empty(n, dtype="<U12")
 
-    mguk_max_kw = float(pu["mguk_max_deploy_kw"])
-
-    superclip_mask = np.zeros_like(s, dtype=bool)
-    for sc in pu["superclip_zones_m"]:
-        superclip_mask |= (s >= sc["start_m"]) & (s <= sc["end_m"])
-
+    # 1. Base allocation: Overrun harvesting under braking, part throttle, and standard straight deployment
     for i in range(n):
         th = throttle_pct[i]
         br = brake_pct[i]
         vk = speed_kmh[i]
 
-        if superclip_mask[i] and th >= 98.0:
-            mguk_power_kw[i] = float(pu["mguk_superclip_kw"])  # -250 kW harvesting at 100% throttle when SOC is low
-            mguk_state[i] = "SUPERCLIP"
-        elif br > 5.0 or th < 5.0:
-            # Overrun harvesting under braking
-            harvest_scale = np.clip(br / 65.0, 0.25, 1.0) * np.clip(vk / 130.0, 0.3, 1.0)
-            mguk_power_kw[i] = float(pu["mguk_max_harvest_overrun_kw"]) * harvest_scale
+        if br > 5.0 or th < 5.0:
+            scale = min(1.0, max(0.25, br / 70.0)) * min(1.0, max(0.3, vk / 120.0))
+            mguk_power_kw[i] = float(pu.get("mguk_max_harvest_kw", -350.0)) * scale
             mguk_state[i] = "HARVEST"
         elif 10.0 <= th <= 65.0:
-            # Part-throttle harvesting in technical corners (-50 to -240 kW)
             pt_frac = (65.0 - th) / 55.0
             mguk_power_kw[i] = -50.0 - 190.0 * np.clip(pt_frac, 0.0, 1.0)
             mguk_state[i] = "HARVEST"
         else:
-            # Full-throttle deployment with FIA 2026 Article 5.4.8 (i) speed taper
             p_dep = _fia_2026_mguk_max_kw(vk, pu)
             mguk_power_kw[i] = p_dep
             mguk_state[i] = "DEPLOY" if abs(p_dep) >= 5.0 else "OFF"
 
-    # Smooth MGU-K trace slightly while keeping state transitions crisp
-    mguk_power_kw = gaussian_filter1d(mguk_power_kw, sigma=1.8, mode="nearest")
-    mguk_power_kw[superclip_mask] = float(pu["mguk_superclip_kw"])
-    # Ensure non-corner, non-superclip straights stay strictly positive (DEPLOY)
-    straight_deploy_mask = (~true_corner_windows) & (~superclip_mask)
-    mguk_power_kw[straight_deploy_mask] = np.maximum(mguk_power_kw[straight_deploy_mask], 95.0)
-
+    # 2. Optimal Superclipping in qualifying:
+    # On high-speed straightaways (v > 305 km/h, full throttle, low curvature),
+    # superclipping extracts up to 350 kW to charge the battery for 2-4 seconds per lap.
+    # At Interlagos, the end of Reta Oposta and top of the main straight climb are optimal.
+    sc_eligible = (throttle_pct >= 95.0) & (speed_kmh > 308.0) & (np.abs(kappa) < 0.0028)
+    sc_zones = ((s >= 1180) & (s <= 1300)) | ((s >= 4080) & (s <= 4235))
+    p_sc_kw = float(pu.get("mguk_superclip_kw", -250.0))
     for i in range(n):
-        if superclip_mask[i]:
+        if sc_zones[i] and sc_eligible[i]:
+            mguk_power_kw[i] = p_sc_kw
             mguk_state[i] = "SUPERCLIP"
-        elif mguk_power_kw[i] >= 0.0:
-            mguk_state[i] = "DEPLOY"
-        else:
-            mguk_state[i] = "HARVEST"
 
-    # Integrate Energy Recovered bars (Overrun, Part throttle, Superclip) [MJ]
-    dt_arr = np.gradient(t)
+    # 3. Exact energy integration with constant efficiencies & 7.0 MJ recharge constraint
+    e_recharge_cum = 0.0
     e_overrun_step = np.zeros_like(s)
     e_part_step = np.zeros_like(s)
     e_superclip_step = np.zeros_like(s)
+    soc_mj = np.zeros_like(s)
+    soc_mj[0] = soc_0
 
-    for i in range(n):
-        if mguk_state[i] == "SUPERCLIP":
-            e_superclip_step[i] = (-mguk_power_kw[i] / 1000.0) * dt_arr[i]
-        elif mguk_state[i] == "HARVEST":
-            if brake_pct[i] > 2.0 or throttle_pct[i] < 10.0:
-                e_overrun_step[i] = (-mguk_power_kw[i] / 1000.0) * dt_arr[i]
+    for i in range(1, n):
+        p_k = mguk_power_kw[i]
+        dt_i = dt_arr[i]
+        if p_k >= 0.0:
+            d_soc = -(p_k / (eta_deploy * 1000.0)) * dt_i
+        else:
+            recharge_step = (-p_k * eta_harvest / 1000.0) * dt_i
+            if e_recharge_cum + recharge_step > recharge_max:
+                recharge_step = max(0.0, recharge_max - e_recharge_cum)
+                p_mguk_kw[i] = -(recharge_step / (eta_harvest * dt_i)) * 1000.0
+                if abs(p_mguk_kw[i]) < 5.0:
+                    mguk_state[i] = "OFF"
+            e_recharge_cum += recharge_step
+            d_soc = recharge_step
+
+            if mguk_state[i] == "SUPERCLIP":
+                e_superclip_step[i] = recharge_step
+            elif brake_pct[i] > 2.0 or throttle_pct[i] < 10.0:
+                e_overrun_step[i] = recharge_step
             else:
-                e_part_step[i] = (-mguk_power_kw[i] / 1000.0) * dt_arr[i]
+                e_part_step[i] = recharge_step
+
+        soc_mj[i] = np.clip(soc_mj[i - 1] + d_soc, soc_min, soc_max)
 
     energy_overrun_mj = np.cumsum(e_overrun_step)
     energy_part_throttle_mj = np.cumsum(e_part_step)
     energy_superclip_mj = np.cumsum(e_superclip_step)
-    target_sc_mj = float(pu.get("target_superclip_total_mj", 0.65))
-    if energy_superclip_mj[-1] > 1e-4:
-        energy_superclip_mj = energy_superclip_mj * (target_sc_mj / energy_superclip_mj[-1])
     energy_total_recovered_mj = energy_overrun_mj + energy_part_throttle_mj + energy_superclip_mj
-
-    # Battery SOC [MJ] starting at SOC_0 = 2.80 MJ and depleting down to ~0.38 MJ right before each Superclip zone
-    soc_0 = float(pu["soc_initial_mj"])
-    soc_min = float(pu["soc_min_mj"])
-    soc_max = float(pu["soc_max_mj"])
-    soc_mj = np.zeros_like(s)
-    soc_mj[0] = soc_0
-    for i in range(1, n):
-        p_k = mguk_power_kw[i]
-        if p_k >= 0.0:
-            eff_draw = 0.67 if s[i] < 1311 else (0.26 if s[i] < 3237 else 0.35)
-            dsoc = -(p_k / 1000.0) * dt_arr[i] * eff_draw
-        else:
-            eff_rec = 0.42 if s[i] < 400 else (0.90 if (1311 <= s[i] <= 3237) else 0.78)
-            dsoc = -(p_k / 1000.0) * dt_arr[i] * eff_rec
-        soc_mj[i] = np.clip(soc_mj[i - 1] + dsoc, soc_min, soc_max)
 
     # Fuel Used [kg] integrated directly from ICE chemical energy flow:
     # m_dot_fuel = P_ice / (eta_th * LHV)
