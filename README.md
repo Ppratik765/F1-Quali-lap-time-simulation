@@ -40,3 +40,4 @@ python generate_video.py --full
 ```
 Outputs:
 - `brazil_2026_quali_1080p60.mp4` (`1:08.450` qualifying lap + `2.0 s` outro hold at `60 FPS`)
+

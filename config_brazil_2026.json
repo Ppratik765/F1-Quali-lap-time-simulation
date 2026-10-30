@@ -9,11 +9,11 @@
     "circuit_length_m": 4309,
     "altitude_m": 765.0,
     "air_density_kg_m3": 1.110,
-    "target_lap_time_s": 68.450,
+    "target_lap_time_s": 70.840,
     "target_sectors_s": {
-      "S1": 17.612,
-      "S2": 34.588,
-      "S3": 16.250
+      "S1": 18.285,
+      "S2": 35.915,
+      "S3": 16.640
     },
     "sector_split_distances_m": {
       "S1_end": 1165,
@@ -28,17 +28,17 @@
     "track_width_front_m": 1.60,
     "track_width_rear_m": 1.55,
     "cg_height_m": 0.28,
-    "initial_speed_kmh": 308.0,
-    "max_speed_kmh": 344.0,
-    "gear_ratios_top_speed_kmh": [105, 142, 180, 218, 252, 284, 314, 350]
+    "initial_speed_kmh": 301.0,
+    "max_speed_kmh": 320.0,
+    "gear_ratios_top_speed_kmh": [104, 144, 184, 224, 260, 294, 326, 355]
   },
   "power_unit_2026": {
     "ice_max_power_kw": 400.0,
     "fuel_energy_flow_limit_mj_h": 3000.0,
     "fuel_lower_heating_value_mj_kg": 43.5,
     "target_lap_fuel_kg": 0.925,
-    "soc_initial_mj": 3.10,
-    "soc_min_mj": 0.40,
+    "soc_initial_mj": 2.95,
+    "soc_min_mj": 0.45,
     "soc_max_mj": 4.00,
     "mguk_max_deploy_kw": 350.0,
     "mguk_taper_start_kmh": 290.0,
@@ -52,14 +52,14 @@
     "target_superclip_total_mj": 0.65,
     "superclip_zones_m": [
       {
-        "name": "Reta Oposta End (Before T4)",
-        "start_m": 1145,
+        "name": "Reta Oposta End (Low-SOC Superclip Before T4)",
+        "start_m": 1150,
         "end_m": 1305,
         "power_kw": -250.0
       },
       {
-        "name": "Main Straight Climb (Before T1)",
-        "start_m": 4095,
+        "name": "Main Straight Climb (Low-SOC Superclip Before Finish)",
+        "start_m": 4085,
         "end_m": 4255,
         "power_kw": -250.0
       }
@@ -69,7 +69,7 @@
     "reference_area_m2": 1.50,
     "z_mode": {
       "cl_base": 2.68,
-      "cd_base": 0.78,
+      "cd_base": 0.82,
       "aero_balance_front_pct": 46.2
     },
     "x_mode": {
@@ -105,8 +105,8 @@
     "min_ride_height_rear_mm": 24.0,
     "roll_gradient_deg_per_g": 0.42,
     "pitch_gradient_deg_per_g": 0.38,
-    "tire_mu_long_peak": 1.95,
-    "tire_mu_lat_peak": 2.12,
+    "tire_mu_long_peak": 1.90,
+    "tire_mu_lat_peak": 2.02,
     "tire_load_sensitivity": 0.045,
     "static_camber_front_deg": -3.1,
     "static_camber_rear_deg": -1.6

@@ -914,3 +914,4 @@ class BroadcastHUDRenderer:
             draw.text((1885 - w_lv, ly), l_val, font=self.fonts["tbl_13"], fill="#FFFFFF")
 
         return frame.convert("RGB")
+

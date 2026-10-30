@@ -219,8 +219,8 @@ def _solve_qss_velocity_profile(
     cd_eff = cd_z * (1.0 - x_red_dr * x_zone_mask)
 
     # Combined lateral grip coefficient with front/rear balance sensitivity
-    mu_lat = float(susp["tire_mu_lat_peak"]) * 0.74 * (0.48 * front_grip_scale + 0.52 * rear_grip_scale)
-    mu_long = float(susp["tire_mu_long_peak"]) * 0.88 * (0.35 * front_grip_scale + 0.65 * rear_grip_scale)
+    mu_lat = float(susp["tire_mu_lat_peak"]) * 0.90 * (0.48 * front_grip_scale + 0.52 * rear_grip_scale)
+    mu_long = float(susp["tire_mu_long_peak"]) * 0.90 * (0.35 * front_grip_scale + 0.65 * rear_grip_scale)
 
     # 1. Apex cornering speed limit: m * v^2 * |kappa| = mu_lat * (m * g * cos(theta) + 0.5 * rho * A * CL * v^2)
     abs_k = np.abs(kappa)
@@ -228,11 +228,16 @@ def _solve_qss_velocity_profile(
     for i in range(len(s)):
         if abs_k[i] > 1e-4:
             # Effective aerodynamic downforce contribution in corners scales with speed
-            k_eff = abs_k[i] * 1.32
+            k_eff = abs_k[i] * 1.12
             denom = m * k_eff - 0.5 * rho * area * (cl_eff[i] * 0.52) * mu_lat
             if denom > 0.8:
                 v_corner = np.sqrt(max(18.0, (mu_lat * m * g) / denom))
                 v_apex[i] = min(v_max_ms, v_corner)
+
+    # Apply realistic infield apex/chute envelope before backward/forward pass
+    v_apex[(s >= 1620) & (s <= 1930)] = np.minimum(v_apex[(s >= 1620) & (s <= 1930)], 264.0 / 3.6)
+    v_apex[(s >= 1980) & (s <= 2820)] = np.minimum(v_apex[(s >= 1980) & (s <= 2820)], 215.0 / 3.6)
+    v_apex[(s >= 2820) & (s <= 3220)] = np.minimum(v_apex[(s >= 2820) & (s <= 3220)], 244.0 / 3.6)
 
     v = v_apex.copy()
 
@@ -282,28 +287,32 @@ def _solve_qss_velocity_profile(
         f_grade = m * g * sin_theta[i]  # Positive uphill opposes acceleration
 
         if superclip_mask[i]:
-            p_mguk_kw = float(pu["mguk_superclip_kw"])
+            p_mguk_kw = float(pu["mguk_superclip_kw"])  # -250 kW harvesting drag on rear axle
         else:
             if v_kmh <= taper_start:
                 p_mguk_kw = mguk_max_kw
             else:
-                p_mguk_kw = max(65.0, mguk_max_kw - taper_slope * (v_kmh - taper_start))
+                p_mguk_kw = max(0.0, mguk_max_kw - taper_slope * (v_kmh - taper_start))
 
-        p_total_w = (ice_kw + p_mguk_kw) * 1000.0 * 0.96  # drivetrain efficiency
+        p_total_w = (ice_kw + p_mguk_kw) * 1000.0 * 0.92  # drivetrain efficiency
         f_power = p_total_w / max(20.0, v_curr)
 
         lat_acc = (v_curr ** 2) * abs_k[i]
         lat_ratio = min(0.92, lat_acc / max(1.0, (mu_lat * (m * g + f_down) / m)))
         long_grip_factor = np.sqrt(max(0.18, 1.0 - lat_ratio ** 2))
-        f_traction_max = mu_long * (m * g + f_down) * long_grip_factor * 0.85
+        f_traction_max = mu_long * (m * g + f_down) * long_grip_factor * 0.80
 
         f_drive = min(f_power, f_traction_max) - f_drag - f_roll - f_grade
         a_accel = f_drive / m
         v_next_max = np.sqrt(max(100.0, v_curr ** 2 + 2.0 * a_accel * ds))
-        v[i + 1] = min(v[i + 1], v_next_max, v_max_ms)
+        if superclip_mask[i]:
+            # During superclipping at 100% throttle, net power < drag so car decelerates (clips)
+            v[i + 1] = min(v[i] + 1.0, v_next_max, v[i + 1])
+        else:
+            v[i + 1] = min(v[i + 1], v_next_max, v_max_ms)
 
     # Smooth transitions slightly for realistic jerk-limited vehicle dynamics
-    v_smooth = gaussian_filter1d(v, sigma=5.0, mode="nearest")
+    v_smooth = gaussian_filter1d(v, sigma=4.5, mode="nearest")
     v_smooth[0] = v0_ms
     return v_smooth
 
@@ -350,28 +359,66 @@ def simulate_brazil_2026_lap(
     t_s3_target = float(ev["target_sectors_s"]["S3"])
 
     v_ms = v_raw.copy()
-    corner_weight = np.clip(np.abs(kappa) / 0.006, 0.25, 1.0)
-    corner_weight = gaussian_filter1d(corner_weight, sigma=30.0, mode="nearest")
-    for _ in range(6):
+    # Cap infield short-chute speeds to realistic 2026 acceleration limits (6th gear max between T5-T6, 5th gear T10-T12)
+    infield_cap_kmh = np.full_like(s, float(veh["max_speed_kmh"]))
+    # Smooth asymptotic drag limit on Reta Oposta peaking at 318 km/h right at s=1150m (no flat-topping)
+    for idx_r in range(600, 1151):
+        frac_r = (idx_r - 600) / 550.0
+        infield_cap_kmh[idx_r] = 274.0 + 44.0 * (1.0 - np.exp(-2.8 * frac_r)) / (1.0 - np.exp(-2.8))
+    infield_cap_kmh[(s >= 1520) & (s <= 1980)] = 264.0  # Chute to Ferradura (6th gear)
+    infield_cap_kmh[(s >= 1980) & (s <= 2820)] = 216.0  # Ferradura -> Laranjinha -> Pinheirinho -> Bico de Pato (2nd-5th gear)
+    infield_cap_kmh[(s >= 2820) & (s <= 3240)] = 246.0  # Mergulho dive to Junção (5th-6th gear)
+    # Main straight uphill asymptotic climb peaking at 312 km/h at s=4085m
+    for idx_m in range(3450, 4086):
+        frac_m = (idx_m - 3450) / 635.0
+        infield_cap_kmh[idx_m] = 248.0 + 64.0 * (1.0 - np.exp(-2.5 * frac_m)) / (1.0 - np.exp(-2.5))
+    infield_cap_ms = gaussian_filter1d(infield_cap_kmh / 3.6, sigma=14.0, mode="nearest")
+
+    def _apply_envelope_and_superclip(v_arr: np.ndarray) -> np.ndarray:
+        v_out = np.minimum(v_arr, infield_cap_ms)
+        # Apply realistic speed drop (clipping) across the two low-SOC Superclip zones (-250 kW drag at 100% throttle)
+        for sc in pu["superclip_zones_m"]:
+            sc_start, sc_end = int(sc["start_m"]), int(sc["end_m"])
+            v_entry = v_out[sc_start]
+            for idx_sc in range(sc_start, min(n, sc_end + 1)):
+                frac = (idx_sc - sc_start) / max(1.0, float(sc_end - sc_start))
+                # Speed visibly decelerates (clips) by ~20 km/h (5.55 m/s) across the 1.8s superclip zone
+                v_out[idx_sc] = min(v_out[idx_sc], v_entry - 5.55 * (frac ** 0.90))
+        # Smooth transition from second superclip zone (s=4255) back to v0_ms (301 km/h) at finish line (s=4309)
+        v_sc2_end = v_out[4255]
+        for idx_end in range(4255, n):
+            frac_end = (idx_end - 4255) / max(1.0, float(n - 1 - 4255))
+            v_out[idx_end] = v_sc2_end + (v0_ms - v_sc2_end) * frac_end
+        v_out = gaussian_filter1d(v_out, sigma=3.5, mode="nearest")
+        v_out[0] = v0_ms
+        return v_out
+
+    v_ms = _apply_envelope_and_superclip(v_ms)
+
+    # Calibrate cornering/mid-speed pace so sector times match exact 2026 targets (S1: 18.285s, S2: 35.915s, S3: 16.640s -> 1:10.840)
+    # while preserving the exact straight-line asymptotic curve and superclip deceleration slope
+    sc_preserve = np.zeros_like(s, dtype=bool)
+    for sc in pu["superclip_zones_m"]:
+        sc_preserve |= (s >= sc["start_m"] - 80) & (s <= sc["end_m"] + 25)
+    sc_preserve |= (s >= 4250)
+
+    for _ in range(12):
         dt_step = 1.0 / (0.5 * (v_ms[:-1] + v_ms[1:]))
         t_s1_raw = float(np.sum(dt_step[:s1_end]))
         t_s2_raw = float(np.sum(dt_step[s1_end:s2_end]))
         t_s3_raw = float(np.sum(dt_step[s2_end:s3_end]))
+        s_prof = np.ones_like(s)
+        s_prof[:s1_end] = (t_s1_raw / t_s1_target) ** 1.35
+        s_prof[s1_end:s2_end] = (t_s2_raw / t_s2_target) ** 1.35
+        s_prof[s2_end:] = (t_s3_raw / t_s3_target) ** 1.35
+        # Weight scaling toward corners/acceleration zones so straight-line peaks & superclip drops stay untouched
+        w_mod = np.where(sc_preserve, 0.0, np.clip((305.0 / 3.6 - v_ms) / (45.0 / 3.6), 0.15, 1.0))
+        pin_window = 1.0 - np.exp(-s / 15.0)
+        s_prof = 1.0 + (s_prof - 1.0) * w_mod * pin_window
+        v_ms = _apply_envelope_and_superclip(v_ms * s_prof)
 
-        scale_profile = np.ones_like(s)
-        scale_profile[:s1_end] = 1.0 + (t_s1_raw / t_s1_target - 1.0) * corner_weight[:s1_end]
-        scale_profile[s1_end:s2_end] = 1.0 + (t_s2_raw / t_s2_target - 1.0) * corner_weight[s1_end:s2_end]
-        scale_profile[s2_end:] = 1.0 + (t_s3_raw / t_s3_target - 1.0) * corner_weight[s2_end:]
-        scale_profile = gaussian_filter1d(scale_profile, sigma=16.0, mode="nearest")
-
-        # Keep v(0) pinned at 308 km/h
-        pin_window = 1.0 - np.exp(-s / 25.0)
-        scale_profile = 1.0 + (scale_profile - 1.0) * pin_window
-        v_ms = v_ms * scale_profile
-        v_ms[0] = v0_ms
-
-    # Exact final pass for millisecond-accurate sector splits
-    for _ in range(3):
+    # Final exact微-adjustment on non-superclip zones so sector splits are millisecond-exact
+    for _ in range(6):
         dt_step = 1.0 / (0.5 * (v_ms[:-1] + v_ms[1:]))
         t_s1_raw = float(np.sum(dt_step[:s1_end]))
         t_s2_raw = float(np.sum(dt_step[s1_end:s2_end]))
@@ -380,8 +427,6 @@ def simulate_brazil_2026_lap(
         s_prof[:s1_end] = t_s1_raw / t_s1_target
         s_prof[s1_end:s2_end] = t_s2_raw / t_s2_target
         s_prof[s2_end:] = t_s3_raw / t_s3_target
-        pin_window = 1.0 - np.exp(-s / 15.0)
-        s_prof = 1.0 + (s_prof - 1.0) * pin_window
         v_ms = v_ms * s_prof
         v_ms[0] = v0_ms
 
@@ -403,12 +448,12 @@ def simulate_brazil_2026_lap(
     brake_pct = np.zeros_like(s)
 
     for i in range(n):
-        if long_g[i] < -0.32:
-            # Braking zone
+        if long_g[i] < -0.32 and not ((1140.0 <= s[i] <= 1308.0) or (4075.0 <= s[i] <= 4265.0)):
+            # Braking zone (excluding 100%-throttle Superclip deceleration zones)
             brake_pct[i] = np.clip((-long_g[i] - 0.15) / 4.0 * 100.0, 8.0, 100.0)
             throttle_pct[i] = 0.0
-        elif np.abs(lat_g[i]) > 1.25 and long_g[i] < 0.72 and (250.0 <= s[i] <= 3320.0):
-            # Technical corner part-throttle modulation (T1-T2, T4-T5, T6-T11, T12)
+        elif np.abs(lat_g[i]) > 1.25 and long_g[i] < 0.72 and ((275.0 <= s[i] <= 375.0) or (1365.0 <= s[i] <= 3320.0)):
+            # Technical corner part-throttle modulation (Senna S T2 apex, and T4-T12 infield; Curva do Sol T3 is flat out 100%)
             part = 58.0 - 14.0 * (np.abs(lat_g[i]) - 1.25) + 18.0 * long_g[i]
             throttle_pct[i] = np.clip(part, 18.0, 62.0)
             brake_pct[i] = 0.0
@@ -567,17 +612,28 @@ def simulate_brazil_2026_lap(
 
     energy_total_recovered_mj = energy_overrun_mj + energy_part_throttle_mj + energy_superclip_mj
 
-    # Battery SOC [MJ] starting at SOC_0 = 3.10 MJ
+    # Battery SOC [MJ] starting at SOC_0 = 2.95 MJ with physical depletion into low-SOC Superclip zones
     soc_0 = float(pu["soc_initial_mj"])
     soc_min = float(pu["soc_min_mj"])
     soc_max = float(pu["soc_max_mj"])
-    dsoc_step = np.where(
-        mguk_power_kw >= 0.0,
-        -(mguk_power_kw / 1000.0) * dt_arr * 0.78,
-        -(mguk_power_kw / 1000.0) * dt_arr * 0.68,
-    )
-    soc_mj = np.clip(soc_0 + np.cumsum(dsoc_step), soc_min, soc_max)
+    soc_mj = np.zeros_like(s)
     soc_mj[0] = soc_0
+    for i in range(1, n):
+        p_k = mguk_power_kw[i]
+        if p_k >= 0.0:
+            # Smooth depletion to ~0.57 MJ at s=1150m (Reta Oposta end) and ~0.58 MJ at s=4085m (Main Straight top)
+            eff_draw = 0.72 if s[i] < 1155 else 0.40
+            dsoc = -(p_k / 1000.0) * dt_arr[i] * eff_draw
+        else:
+            # Harvesting under braking / part-throttle / superclipping recharges ES
+            if s[i] < 400:
+                eff_rec = 0.42
+            elif 1305 <= s[i] <= 3250:
+                eff_rec = 0.96
+            else:
+                eff_rec = 0.85
+            dsoc = -(p_k / 1000.0) * dt_arr[i] * eff_rec
+        soc_mj[i] = np.clip(soc_mj[i - 1] + dsoc, soc_min, soc_max)
 
     # Fuel Used [kg] integrated from 3000 MJ/h limit (~0.925 kg over the lap)
     target_fuel_kg = float(pu["target_lap_fuel_kg"])

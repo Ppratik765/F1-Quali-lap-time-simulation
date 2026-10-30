@@ -90,26 +90,32 @@ def _build_procedural_interlagos(length_m: int = 4309) -> TrackData:
     kappa = np.zeros_like(s)
     corners = [
         # (name, apex_s, peak_kappa_1_m, half_width_m)
-        ("T1_SennaS_L",       317.0,  +0.0176,  38.0),
-        ("T2_SennaS_R",       423.0,  -0.0128,  42.0),
-        ("T3_CurvaDoSol_L",   595.0,  +0.0052,  85.0),
-        ("T4_Descida_L1",    1395.0,  +0.0102,  48.0),
-        ("T5_Descida_L2",    1555.0,  +0.0082,  52.0),
-        ("T6_Ferradura_R1",  1990.0,  -0.0096,  55.0),
-        ("T7_Ferradura_R2",  2125.0,  -0.0085,  50.0),
-        ("T8_Laranjinha_R",  2304.0,  -0.0148,  42.0),
-        ("T9_Pinheirinho_L", 2460.0,  +0.0172,  42.0),
-        ("T10_BicoDePato_R", 2731.0,  -0.0205,  36.0),
-        ("T11_Mergulho_L",   2955.0,  +0.0076,  62.0),
-        ("T12_Juncao_L",     3224.0,  +0.0168,  42.0),
-        ("T13_Subida_L",     3615.0,  +0.0028,  90.0),
-        ("T14_Arquibanc_L",  3955.0,  +0.0031, 110.0),
+        ("T1_SennaS_L",       312.0,  +0.0195,  32.0),
+        ("T2_SennaS_R",       420.0,  -0.0145,  36.0),
+        ("T3_CurvaDoSol_L",   575.0,  +0.0068,  65.0),
+        ("T4_Descida_L1",    1415.0,  +0.0118,  36.0),
+        ("T5_Descida_L2",    1545.0,  +0.0098,  42.0),
+        ("T5b_SubidaChute",  1740.0,  -0.0038,  65.0),
+        ("T6_Ferradura_R1",  1985.0,  -0.0115,  45.0),
+        ("T7_Ferradura_R2",  2120.0,  -0.0102,  44.0),
+        ("T8_Laranjinha_R",  2304.0,  -0.0165,  38.0),
+        ("T9_Pinheirinho_L", 2465.0,  +0.0192,  36.0),
+        ("T10_BicoDePato_R", 2731.0,  -0.0228,  32.0),
+        ("T11_Mergulho_L",   2955.0,  +0.0092,  52.0),
+        ("T12_Juncao_L",     3224.0,  +0.0188,  36.0),
+        ("T13_Subida_L",     3585.0,  +0.0024,  75.0),
+        ("T14_Arquibanc_L",  3890.0,  +0.0022,  80.0),
     ]
 
     for _, apex_s, k_peak, width_m in corners:
         dist = np.abs(s - apex_s)
         dist = np.minimum(dist, length_m - dist)
         kappa += k_peak * np.exp(-0.5 * (dist / width_m) ** 2)
+
+    # Zero out curvature on the straight braking/superclip zones (Reta Oposta & Main Straight)
+    kappa[(s >= 740) & (s <= 1320)] *= np.linspace(0.15, 0.0, 581)
+    kappa[(s >= 1120) & (s <= 1315)] = 0.0
+    kappa[(s >= 4060) | (s <= 230)] = 0.0
 
     corner_labels = {name: apex_s for name, apex_s, _, _ in corners}
 
