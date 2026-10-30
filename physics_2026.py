@@ -647,25 +647,62 @@ def simulate_brazil_2026_lap(
     pitch_deg = np.clip(-long_g * float(susp["pitch_gradient_deg_per_g"]) - 0.35 * df_norm, -1.8, 1.5)
 
     # 4-Corner Vertical Tire Loads Fz [kN] (FL, FR, RL, RR)
-    # Allows inside front wheel unloading down to 0.0-0.3 kN in tight high-G corners
+    # Physically exact load transfer:
+    #   1. Longitudinal transfer = m * a_x * (h_cg / wb)
+    #   2. Aero downforce split by aero_balance_pct
+    #   3. Lateral transfer split by front roll-stiffness fraction k_phi_f (k_phi_f + k_phi_r == 1.0)
+    #   4. sum(Fz) == m * g * cos(theta) + downforce within 1% at every point (no arbitrary clip floors)
     m = float(veh["mass_kg"])
     wf = float(veh["weight_distribution_front"])
     h_cg = float(veh["cg_height_m"])
     wb = float(veh["wheelbase_m"])
     tw_f = float(veh["track_width_front_m"])
     tw_r = float(veh["track_width_rear_m"])
+    k_phi_f = float(susp.get("roll_stiffness_front_ratio", 0.58))
+    k_phi_r = 1.0 - k_phi_f
 
-    f_total_front_n = m * g * wf + downforce_n * (aero_balance_pct / 100.0) - (m * g * long_g) * (h_cg / wb)
-    f_total_rear_n = m * g * (1.0 - wf) + downforce_n * (1.0 - aero_balance_pct / 100.0) + (m * g * long_g) * (h_cg / wb)
+    cos_theta = np.sqrt(np.maximum(0.0, 1.0 - sin_theta**2))
+    fz_target_total_n = m * g * cos_theta + downforce_n
 
-    # Front-biased roll stiffness distribution causes inside front tire unloading in tight corners
-    df_lat_front_n = (m * g * lat_g) * (h_cg / tw_f) * 1.48
-    df_lat_rear_n = (m * g * lat_g) * (h_cg / tw_r) * 0.92
+    f_axle_front_n = m * g * cos_theta * wf + downforce_n * (aero_balance_pct / 100.0) - (m * g * long_g) * (h_cg / wb)
+    f_axle_rear_n = m * g * cos_theta * (1.0 - wf) + downforce_n * (1.0 - aero_balance_pct / 100.0) + (m * g * long_g) * (h_cg / wb)
 
-    fz_fl_kn = np.clip((0.5 * f_total_front_n - df_lat_front_n) / 1000.0, 0.10, 8.5)
-    fz_fr_kn = np.clip((0.5 * f_total_front_n + df_lat_front_n) / 1000.0, 0.10, 8.5)
-    fz_rl_kn = np.clip((0.5 * f_total_rear_n - df_lat_rear_n) / 1000.0, 0.40, 9.5)
-    fz_rr_kn = np.clip((0.5 * f_total_rear_n + df_lat_rear_n) / 1000.0, 0.40, 9.5)
+    m_lat_total_n_m = (m * g * lat_g) * h_cg
+    df_lat_front_n = k_phi_f * (m_lat_total_n_m / tw_f)
+    df_lat_rear_n = k_phi_r * (m_lat_total_n_m / tw_r)
+
+    fz_fl_raw_n = 0.5 * f_axle_front_n - df_lat_front_n
+    fz_fr_raw_n = 0.5 * f_axle_front_n + df_lat_front_n
+    fz_rl_raw_n = 0.5 * f_axle_rear_n - df_lat_rear_n
+    fz_rr_raw_n = 0.5 * f_axle_rear_n + df_lat_rear_n
+
+    # Natural non-negative ground contact with physical load redistribution
+    # If a tire unloads completely to zero, its negative reaction cannot pull on the ground
+    fz_fl_n = fz_fl_raw_n.copy()
+    fz_fr_n = fz_fr_raw_n.copy()
+    fz_rl_n = fz_rl_raw_n.copy()
+    fz_rr_n = fz_rr_raw_n.copy()
+
+    for idx_w in range(n):
+        # Front axle redistribution
+        if fz_fl_n[idx_w] < 0.0:
+            fz_fr_n[idx_w] = max(0.0, fz_fr_n[idx_w] + fz_fl_n[idx_w])
+            fz_fl_n[idx_w] = 0.0
+        elif fz_fr_n[idx_w] < 0.0:
+            fz_fl_n[idx_w] = max(0.0, fz_fl_n[idx_w] + fz_fr_n[idx_w])
+            fz_fr_n[idx_w] = 0.0
+        # Rear axle redistribution
+        if fz_rl_n[idx_w] < 0.0:
+            fz_rr_n[idx_w] = max(0.0, fz_rr_n[idx_w] + fz_rl_n[idx_w])
+            fz_rl_n[idx_w] = 0.0
+        elif fz_rr_n[idx_w] < 0.0:
+            fz_rl_n[idx_w] = max(0.0, fz_rl_n[idx_w] + fz_rr_n[idx_w])
+            fz_rr_n[idx_w] = 0.0
+
+    fz_fl_kn = fz_fl_n / 1000.0
+    fz_fr_kn = fz_fr_n / 1000.0
+    fz_rl_kn = fz_rl_n / 1000.0
+    fz_rr_kn = fz_rr_n / 1000.0
 
     # Dynamic Camber gamma [deg] & Slip Angle phi [deg]
     cam_f0 = float(susp["static_camber_front_deg"])
