@@ -5,7 +5,7 @@ generate_video.py — Master CLI script supporting:
               - frame_01_superclip.png
               - frame_02_braking.png
               - frame_03_cornering.png
-  --full    : Renders the full ~70-second qualifying lap (68.450s + 2.0s outro)
+  --full    : Renders the full ~70-second qualifying lap (simulated lap time + 2.0s outro)
               at 60 FPS 1080p (brazil_2026_quali_1080p60.mp4) via an ffmpeg pipe.
 """
 

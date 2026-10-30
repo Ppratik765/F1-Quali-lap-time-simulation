@@ -80,8 +80,8 @@ class TelemetryResult:
 
     # Sectors & Sensitivity
     sector_splits_m: Tuple[int, int, int] = (1165, 3180, 4309)
-    sector_times_s: Tuple[float, float, float] = (17.612, 34.588, 16.250)
-    lap_time_s: float = 68.450
+    sector_times_s: Tuple[float, float, float] = (0.0, 0.0, 0.0)
+    lap_time_s: float = 0.0
     sensitivity_deltas_s: Dict[str, np.ndarray] = field(default_factory=dict)
 
     def sample_at_time(self, t_query: float) -> Dict[str, Any]:
