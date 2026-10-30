@@ -52,15 +52,15 @@
     "target_superclip_total_mj": 0.65,
     "superclip_zones_m": [
       {
-        "name": "Reta Oposta End (Before T4)",
-        "start_m": 1145,
-        "end_m": 1305,
+        "name": "Main Straight Climb (Before T1)",
+        "start_m": 80,
+        "end_m": 225,
         "power_kw": -250.0
       },
       {
-        "name": "Main Straight Climb (Before T1)",
-        "start_m": 4135,
-        "end_m": 4285,
+        "name": "Reta Oposta End (Before T4)",
+        "start_m": 1145,
+        "end_m": 1305,
         "power_kw": -250.0
       }
     ]
