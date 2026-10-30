@@ -35,14 +35,18 @@
     "track_width_rear_m": 1.55,
     "cg_height_m": 0.28,
     "gear_ratios_top_speed_kmh": [
-      104,
-      144,
-      184,
-      224,
-      260,
-      294,
-      326,
-      355
+      105,
+      142,
+      178,
+      215,
+      252,
+      288,
+      322,
+      360
+    ],
+    "engine_speed_range_rpm": [
+      10200,
+      12200
     ]
   },
   "power_unit_2026": {

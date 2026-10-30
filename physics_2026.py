@@ -478,14 +478,14 @@ def simulate_brazil_2026_lap(
     throttle_pct[brake_pct > 5.0] = 0.0
     brake_pct[throttle_pct > 5.0] = 0.0
 
-    # Gear selection [1..8] from speed thresholds
+    # Gear selection [1..8] derived from speed and engine speed plateau
     gear_thresholds = veh["gear_ratios_top_speed_kmh"]
     gear = np.ones_like(s, dtype=int)
     for i, v_k in enumerate(speed_kmh):
         g_val = 8
         for g_idx, g_max in enumerate(gear_thresholds):
-            if v_k < g_max:
-                g_val = max(2, g_idx + 1)
+            if v_k <= g_max:
+                g_val = g_idx + 1
                 break
         gear[i] = g_val
 
