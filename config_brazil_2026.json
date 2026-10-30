@@ -9,16 +9,18 @@
     "circuit_length_m": 4309,
     "altitude_m": 765.0,
     "air_density_kg_m3": 1.11,
-    "target_lap_time_s": 70.84,
-    "target_sectors_s": {
-      "S1": 18.285,
-      "S2": 35.915,
-      "S3": 16.64
-    },
     "sector_split_distances_m": {
       "S1_end": 1165,
       "S2_end": 3180,
       "S3_end": 4309
+    },
+    "reference_comparison": {
+      "lap_time_s": 70.84,
+      "sectors_s": {
+        "S1": 18.285,
+        "S2": 35.915,
+        "S3": 16.64
+      }
     }
   },
   "vehicle_2026": {
@@ -28,8 +30,6 @@
     "track_width_front_m": 1.6,
     "track_width_rear_m": 1.55,
     "cg_height_m": 0.28,
-    "initial_speed_kmh": 304.0,
-    "max_speed_kmh": 322.0,
     "gear_ratios_top_speed_kmh": [
       104,
       144,
