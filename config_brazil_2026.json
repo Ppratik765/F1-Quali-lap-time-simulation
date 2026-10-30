@@ -71,7 +71,8 @@
     "mguk_taper_c1_kw": 1800.0,
     "mguk_taper_s1_kw_per_kmh": 5.0,
     "mguk_taper_c2_kw": 6900.0,
-    "mguk_taper_s2_kw_per_kmh": 20.0
+    "mguk_taper_s2_kw_per_kmh": 20.0,
+    "drivetrain_efficiency": 0.96
   },
   "aerodynamics_2026": {
     "reference_area_m2": 1.5,
@@ -117,7 +118,9 @@
     "tire_mu_lat_peak": 2.02,
     "tire_load_sensitivity": 0.045,
     "static_camber_front_deg": -3.1,
-    "static_camber_rear_deg": -1.6
+    "static_camber_rear_deg": -1.6,
+    "rolling_resistance_coeff": 0.012,
+    "roll_stiffness_front_ratio": 0.58
   },
   "visual_3d_scale": {
     "chassis_motion_multiplier": 2.5,

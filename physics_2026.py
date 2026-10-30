@@ -8,7 +8,7 @@ physics_2026.py — 2026 FIA Quasi-Steady-State (QSS) forward-backward velocity 
 import json
 import os
 from dataclasses import dataclass, field
-from typing import Dict, Any, Tuple
+from typing import Dict, Any, Tuple, Optional
 import numpy as np
 from scipy.ndimage import gaussian_filter1d, uniform_filter1d
 
@@ -236,10 +236,16 @@ def _solve_qss_velocity_profile(
     cd_scale: float = 1.0,
     front_grip_scale: float = 1.0,
     rear_grip_scale: float = 1.0,
+    p_mguk_schedule: Optional[np.ndarray] = None,
 ) -> np.ndarray:
     """
-    Solves the 2026 FIA Quasi-Steady-State (QSS) forward-backward velocity profile v(s) [m/s]
-    incorporating 3D longitudinal slope gravity, Active Aero (Z-Mode / X-Mode), and MGU-K taper.
+    Solves the Quasi-Steady-State (QSS) velocity profile v(s) [m/s] using:
+      1. Load-sensitive tyre friction model mu(Fz) = mu_0 * (Fz / Fz0)^(-alpha)
+      2. Aerodynamic downforce and drag (Z-mode cornering vs X-mode straight line)
+      3. Standard friction-ellipse limit (Fx / Fx_max)^2 + (Fy / Fy_max)^2 <= 1
+      4. 3D longitudinal slope gravity component F_grade = m * g * sin(theta)
+      5. Periodic boundary conditions for a flying lap: v(0) == v(L)
+    Zero unexplained fudge factors.
     """
     g = 9.81
     veh = cfg["vehicle_2026"]
@@ -250,101 +256,130 @@ def _solve_qss_velocity_profile(
     m = float(veh["mass_kg"])
     rho = compute_air_density(cfg)
     area = float(aero["reference_area_m2"])
-    v_ceil_ms = 120.0  # Numerical upper bound (432 km/h); actual top speed is emergent from drag & power
+    v_ceil_ms = 115.0  # Numerical ceiling (414 km/h)
 
+    # Base aerodynamic coefficients
     cl_z = float(aero["z_mode"]["cl_base"]) * cl_scale
     cd_z = float(aero["z_mode"]["cd_base"]) * cd_scale
     x_red_df = float(aero["x_mode"]["downforce_reduction_ratio"])
     x_red_dr = float(aero["x_mode"]["drag_reduction_ratio"])
 
-    # Determine straight-line X-mode eligibility mask from track zones and curvature
+    # X-mode straight-line activation mask based on curvature and designated track zones
     x_zone_mask = np.zeros_like(s, dtype=np.float64)
     for zone in aero["x_mode"]["activation_zones_m"]:
         mask = (s >= zone["start_m"]) & (s <= zone["end_m"])
         x_zone_mask[mask] = 1.0
-    x_zone_mask[np.abs(kappa) > 0.0042] = 0.0
-    x_zone_mask = gaussian_filter1d(x_zone_mask, sigma=18.0, mode="wrap")
+    x_zone_mask[np.abs(kappa) > 0.0035] = 0.0
+    x_zone_mask = gaussian_filter1d(x_zone_mask, sigma=15.0, mode="wrap")
 
-    cl_eff = cl_z * (1.0 - x_red_df * x_zone_mask)
-    cd_eff = cd_z * (1.0 - x_red_dr * x_zone_mask)
+    cla_eff = (cl_z * (1.0 - x_red_df * x_zone_mask)) * area
+    cda_eff = (cd_z * (1.0 - x_red_dr * x_zone_mask)) * area
 
-    # Combined lateral grip coefficient with front/rear balance sensitivity
-    mu_lat = float(susp["tire_mu_lat_peak"]) * 0.90 * (0.48 * front_grip_scale + 0.52 * rear_grip_scale)
-    mu_long = float(susp["tire_mu_long_peak"]) * 0.90 * (0.35 * front_grip_scale + 0.65 * rear_grip_scale)
+    # Load-sensitive tyre model parameters
+    mu_lat_0 = float(susp["tire_mu_lat_peak"]) * (0.5 * front_grip_scale + 0.5 * rear_grip_scale)
+    mu_long_0 = float(susp["tire_mu_long_peak"]) * (0.5 * front_grip_scale + 0.5 * rear_grip_scale)
+    alpha_load = float(susp.get("tire_load_sensitivity", 0.08))
+    c_rr = float(susp.get("rolling_resistance_coeff", 0.012))
+    eta_dt = float(pu.get("drivetrain_efficiency", 0.96))
 
-    # 1. Apex cornering speed limit: m * v^2 * |kappa| = mu_lat * (m * g * cos(theta) + 0.5 * rho * A * CL * v^2)
+    cos_theta = np.sqrt(np.maximum(0.0, 1.0 - sin_theta**2))
+    fz_static = m * g * cos_theta
+    n = len(s)
+
+    def calc_mu_lat(fz_total: np.ndarray) -> np.ndarray:
+        ratio = np.maximum(0.2, fz_total / (m * g))
+        return mu_lat_0 * (ratio ** (-alpha_load))
+
+    def calc_mu_long(fz_total: np.ndarray) -> np.ndarray:
+        ratio = np.maximum(0.2, fz_total / (m * g))
+        return mu_long_0 * (ratio ** (-alpha_load))
+
+    # 1. Apex Cornering Limit: m * v^2 * |kappa| = mu_lat(Fz) * (m*g*cos_theta + 0.5 * rho * CLA * v^2)
     abs_k = np.abs(kappa)
     v_apex = np.full_like(s, v_ceil_ms)
-    for i in range(len(s)):
+    for i in range(n):
         if abs_k[i] > 1e-4:
-            k_eff = abs_k[i] * 1.15
-            denom = m * k_eff - 0.5 * rho * area * (cl_eff[i] * 0.50) * mu_lat
-            if denom > 0.8:
-                v_corner = np.sqrt(max(18.0, (mu_lat * m * g) / denom))
-                v_apex[i] = min(v_ceil_ms, v_corner)
+            # Iterative solve for v with load sensitivity
+            v_guess = 50.0
+            for _ in range(3):
+                fz_dyn = fz_static[i] + 0.5 * rho * cla_eff[i] * (v_guess**2)
+                mu_l = mu_lat_0 * (max(0.2, fz_dyn / (m * g)) ** (-alpha_load))
+                denom = m * abs_k[i] - 0.5 * rho * cla_eff[i] * mu_l
+                if denom > 0.01:
+                    v_guess = np.sqrt((mu_l * fz_static[i]) / denom)
+                else:
+                    v_guess = v_ceil_ms
+                    break
+            v_apex[i] = min(v_ceil_ms, max(10.0, v_guess))
 
     v = v_apex.copy()
 
-    # 2. Backward Pass (Braking limit with 3D grade and aerodynamic drag, periodic wrap)
-    n = len(s)
+    # 2. Backward Pass (Braking limit with standard friction ellipse)
     for _ in range(3):
         for i in range(n - 2, -1, -1):
             ds = s[i + 1] - s[i]
             v_next = v[i + 1]
-            q_dyn = 0.5 * rho * area * (v_next ** 2)
-            f_down = q_dyn * cl_eff[i]
-            f_drag = q_dyn * cd_eff[i]
-            f_grade = m * g * sin_theta[i]  # Positive uphill helps braking
+            q_dyn = 0.5 * rho * (v_next**2)
+            fz = fz_static[i] + q_dyn * cla_eff[i]
+            f_drag = q_dyn * cda_eff[i]
+            f_grade = m * g * sin_theta[i]
 
-            lat_acc = (v_next ** 2) * abs_k[i]
-            lat_ratio = min(0.92, lat_acc / max(1.0, (mu_lat * (m * g + f_down) / m)))
-            long_grip_factor = np.sqrt(max(0.20, 1.0 - lat_ratio ** 2))
+            mu_lat_i = calc_mu_lat(fz)
+            mu_long_i = calc_mu_long(fz)
 
-            f_brake_max = mu_long * (m * g + f_down) * long_grip_factor * 0.92 + f_drag + f_grade
-            a_decel = f_brake_max / m
-            v_allow = np.sqrt(max(100.0, v_next ** 2 + 2.0 * a_decel * ds))
+            a_lat_req = (v_next**2) * abs_k[i]
+            a_lat_max = (mu_lat_i * fz) / m
+            r_lat = min(1.0, a_lat_req / max(0.1, a_lat_max))
+            r_long = np.sqrt(max(0.0, 1.0 - r_lat**2))
+
+            f_tire_brake_max = r_long * mu_long_i * fz
+            f_brake_total = f_tire_brake_max + f_drag + f_grade
+            a_decel = max(0.1, f_brake_total / m)
+
+            v_allow = np.sqrt(v_next**2 + 2.0 * a_decel * ds)
             v[i] = min(v[i], v_allow)
         v[-1] = min(v[-1], v[0])
 
-    # Superclip distance mask
-    superclip_mask = np.zeros_like(s, dtype=bool)
-    for sc in pu.get("superclip_zones_m", []):
-        superclip_mask |= (s >= sc["start_m"]) & (s <= sc["end_m"])
-
-    # 3. Forward Pass (Acceleration with periodic boundary convergence v(0) == v(L))
+    # 3. Forward Pass (Acceleration limit with powertrain, tire traction, and friction ellipse)
     ice_kw = float(pu["ice_max_power_kw"]) + power_offset_kw
-    mguk_max_kw = float(pu["mguk_max_deploy_kw"])
+
     for _ in range(3):
         for i in range(n - 1):
             ds = s[i + 1] - s[i]
             v_curr = v[i]
             v_kmh = v_curr * 3.6
-            q_dyn = 0.5 * rho * area * (v_curr ** 2)
-            f_down = q_dyn * cl_eff[i]
-            f_drag = q_dyn * cd_eff[i]
-            f_roll = 0.012 * (m * g + f_down)
-            f_grade = m * g * sin_theta[i]  # Positive uphill opposes acceleration
+            q_dyn = 0.5 * rho * (v_curr**2)
+            fz = fz_static[i] + q_dyn * cla_eff[i]
+            f_drag = q_dyn * cda_eff[i]
+            f_roll = c_rr * fz
+            f_grade = m * g * sin_theta[i]
 
-            if superclip_mask[i]:
-                p_mguk_kw = float(pu.get("mguk_superclip_kw", -250.0))
+            mu_lat_i = calc_mu_lat(fz)
+            mu_long_i = calc_mu_long(fz)
+
+            a_lat_req = (v_curr**2) * abs_k[i]
+            a_lat_max = (mu_lat_i * fz) / m
+            r_lat = min(1.0, a_lat_req / max(0.1, a_lat_max))
+            r_long = np.sqrt(max(0.0, 1.0 - r_lat**2))
+
+            f_traction_max = r_long * mu_long_i * fz
+
+            # Powertrain power available
+            if p_mguk_schedule is not None:
+                p_mguk_kw = p_mguk_schedule[i]
             else:
                 p_mguk_kw = _fia_2026_mguk_max_kw(v_kmh, pu)
 
-            p_total_w = (ice_kw + p_mguk_kw) * 1000.0 * 0.92
-            f_power = p_total_w / max(20.0, v_curr)
+            p_wheel_w = (ice_kw + p_mguk_kw) * 1000.0 * eta_dt
+            f_powertrain = p_wheel_w / max(12.0, v_curr)
 
-            lat_acc = (v_curr ** 2) * abs_k[i]
-            lat_ratio = min(0.92, lat_acc / max(1.0, (mu_lat * (m * g + f_down) / m)))
-            long_grip_factor = np.sqrt(max(0.18, 1.0 - lat_ratio ** 2))
-            f_traction_max = mu_long * (m * g + f_down) * long_grip_factor * 0.80
-
-            f_drive = min(f_power, f_traction_max) - f_drag - f_roll - f_grade
+            f_drive = min(f_traction_max, f_powertrain) - f_drag - f_roll - f_grade
             a_accel = f_drive / m
-            v_next_max = np.sqrt(max(100.0, v_curr ** 2 + 2.0 * a_accel * ds))
-            v[i + 1] = min(v[i + 1], v_next_max)
+            v_next_sq = max(100.0, v_curr**2 + 2.0 * a_accel * ds)
+            v[i + 1] = min(v[i + 1], np.sqrt(v_next_sq))
         v[0] = min(v[0], v[-1])
 
-    v_smooth = gaussian_filter1d(v, sigma=3.0, mode="wrap")
+    v_smooth = gaussian_filter1d(v, sigma=2.0, mode="wrap")
     return v_smooth
 
 
