@@ -53,14 +53,14 @@
     "superclip_zones_m": [
       {
         "name": "Reta Oposta End (Before T4)",
-        "start_m": 1035,
-        "end_m": 1190,
+        "start_m": 1145,
+        "end_m": 1305,
         "power_kw": -250.0
       },
       {
         "name": "Main Straight Climb (Before T1)",
-        "start_m": 4090,
-        "end_m": 4255,
+        "start_m": 4135,
+        "end_m": 4285,
         "power_kw": -250.0
       }
     ]
@@ -82,18 +82,18 @@
       "activation_zones_m": [
         {
           "name": "Reta Oposta (T3-T4)",
-          "start_m": 670,
-          "end_m": 1195
+          "start_m": 725,
+          "end_m": 1310
         },
         {
           "name": "Arquibancadas / Main Straight (T13-T1)",
-          "start_m": 3470,
-          "end_m": 4260
+          "start_m": 3460,
+          "end_m": 4309
         },
         {
           "name": "Start Straight to T1 Braking",
           "start_m": 0,
-          "end_m": 185
+          "end_m": 225
         }
       ]
     }

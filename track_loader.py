@@ -8,10 +8,15 @@ closed-loop spline + elevation fallback.
 import json
 import os
 from dataclasses import dataclass
-from typing import Dict, Any, Optional
+from typing import Dict
 import numpy as np
 from scipy.interpolate import CubicSpline
 from scipy.ndimage import gaussian_filter1d
+
+# Authentic GPS survey coordinates (170 closed-loop control points in local meters)
+# of Autódromo José Carlos Pace (Interlagos, 4309 m)
+_INTERLAGOS_GPS_X = [0.0, 234.18, 258.86, 273.64, 297.01, 304.27, 310.57, 312.81, 312.88, 311.06, 298.34, 282.68, 279.03, 277.78, 279.16, 286.2, 309.2, 323.04, 330.77, 335.93, 339.61, 341.51, 341.42, 338.62, 332.07, 322.01, 310.02, 296.43, 283.19, 267.82, 183.45, 140.66, 68.06, -24.92, -176.68, -231.41, -269.8, -287.67, -299.23, -310.69, -318.89, -329.21, -339.15, -347.19, -354.92, -377.5, -384.46, -386.32, -387.51, -386.22, -381.07, -376.21, -368.31, -357.14, -339.11, -275.42, -235.85, -201.99, -168.27, -149.29, -135.08, -127.35, -123.42, -121.45, -122.71, -128.08, -133.8, -140.17, -147.35, -161.27, -171.37, -180.71, -193.6, -210.32, -234.79, -257.08, -297.55, -314.01, -330.37, -342.05, -347.02, -348.38, -349.06, -348.34, -344.71, -339.69, -317.98, -310.75, -306.33, -303.22, -301.22, -300.59, -302.19, -309.7, -318.47, -328.89, -338.33, -349.74, -359.33, -375.39, -385.94, -422.35, -443.75, -462.15, -485.36, -513.41, -530.2, -545.1, -556.85, -564.01, -568.08, -568.81, -569.02, -566.51, -561.71, -511.24, -468.71, -462.95, -452.02, -444.77, -440.11, -435.87, -432.45, -429.78, -428.47, -430.08, -435.63, -444.95, -454.52, -465.39, -499.17, -539.24, -582.8, -588.25, -595.11, -602.36, -610.52, -618.4, -630.33, -643.94, -672.18, -676.67, -681.06, -683.57, -684.47, -684.39, -682.43, -676.18, -672.75, -661.01, -654.35, -646.06, -637.26, -627.55, -615.53, -599.54, -582.01, -545.6, -499.37, -455.17, -409.07, -374.06, -350.13, -332.15, -307.13, -277.03, -254.04, -226.86, -187.39, -62.84]
+_INTERLAGOS_GPS_Y = [0.0, 10.18, 11.28, 14.49, 23.89, 29.73, 39.01, 49.05, 60.59, 67.01, 88.45, 109.99, 117.95, 127.59, 136.76, 149.01, 173.26, 193.43, 208.96, 223.58, 237.17, 257.89, 274.04, 294.52, 314.54, 335.11, 352.54, 367.19, 378.75, 389.3, 435.75, 456.92, 492.96, 537.92, 614.41, 641.97, 661.37, 670.38, 674.81, 676.0, 674.83, 670.67, 661.34, 649.72, 632.11, 579.35, 558.34, 544.79, 527.97, 511.56, 496.21, 481.64, 466.43, 451.05, 429.42, 357.38, 314.62, 278.18, 238.95, 218.05, 202.02, 191.32, 180.39, 165.61, 150.05, 127.46, 112.86, 101.61, 91.9, 75.6, 68.17, 63.81, 60.41, 59.28, 58.65, 58.6, 60.75, 63.0, 66.79, 73.33, 80.94, 85.81, 91.68, 99.34, 106.79, 114.36, 133.06, 140.89, 147.24, 154.38, 161.14, 168.92, 180.08, 194.48, 203.53, 209.59, 212.23, 213.09, 210.76, 204.18, 197.36, 173.15, 161.25, 153.82, 150.53, 150.14, 150.79, 152.4, 155.94, 162.35, 167.28, 173.99, 179.45, 185.89, 192.99, 221.29, 245.98, 250.58, 260.85, 270.87, 279.45, 290.31, 300.51, 312.54, 332.04, 347.47, 364.68, 382.9, 393.99, 405.98, 439.08, 476.22, 517.85, 521.09, 523.07, 522.64, 520.62, 515.12, 500.69, 478.91, 434.84, 426.01, 414.46, 389.8, 367.93, 319.61, 303.17, 269.99, 253.54, 213.57, 197.27, 182.81, 168.03, 155.46, 143.53, 131.6, 121.0, 102.44, 80.85, 63.65, 40.42, 24.34, 11.76, 5.44, -0.4, -5.34, -6.79, -6.74, -5.03, -2.05]
 
 
 @dataclass
@@ -30,96 +35,75 @@ class TrackData:
 def _build_procedural_interlagos(length_m: int = 4309) -> TrackData:
     """
     Constructs a high-accuracy closed-loop representation of Autódromo José Carlos Pace
-    (Interlagos, 4309 m) matching the real circuit's 2D layout, elevation profile
+    (Interlagos, 4309 m) matching the real circuit's 2D GPS survey layout, elevation profile
     (742 m to 786 m ASL), and corner curvature signature.
     """
-    # Authentic normalized 2D waypoints (s_m, x_m, y_m, z_m) around Interlagos (counter-clockwise)
-    # Oriented to match standard F1 broadcast track maps:
-    # Start/Finish on top-left/left slanted straight, Senna S at bottom-left,
-    # Reta Oposta along bottom/right, Descida do Lago at top-right, infield loop in middle.
-    waypoints = np.array([
-        # s_m,     x_m,     y_m,     z_m (altitude m)
-        [0.0,     -420.0,   190.0,   781.0],  # Start / Finish line
-        [185.0,   -535.0,    55.0,   783.5],  # T1 braking (Senna S entry - highest point)
-        [255.0,   -525.0,   -18.0,   776.5],  # T1 apex (Left, steep downhill drop)
-        [335.0,   -450.0,   -42.0,   768.0],  # T2 apex (Right, Senna S exit)
-        [440.0,   -415.0,  -120.0,   761.5],  # T3 entry (Curva do Sol)
-        [555.0,   -340.0,  -215.0,   757.0],  # T3 mid-apex (sweeping left)
-        [675.0,   -210.0,  -248.0,   754.5],  # T3 exit onto Reta Oposta
-        [930.0,     40.0,  -240.0,   750.5],  # Mid Reta Oposta
-        [1190.0,   295.0,  -230.0,   747.0],  # End of Reta Oposta (T4 braking)
-        [1285.0,   365.0,  -170.0,   743.5],  # T4 apex (Descida do Lago left 1)
-        [1385.0,   355.0,   -75.0,   742.0],  # T5 apex (Descida do Lago left 2 - lowest point)
-        [1540.0,   215.0,    35.0,   748.5],  # Back climb toward Ferradura
-        [1685.0,    95.0,   125.0,   756.0],  # T6 braking (Ferradura entry)
-        [1785.0,    50.0,   195.0,   758.5],  # T6 apex (Right)
-        [1890.0,   115.0,   235.0,   756.5],  # T7 apex (Ferradura exit right)
-        [2015.0,   210.0,   160.0,   755.0],  # Approach to Laranjinha
-        [2115.0,   245.0,    85.0,   756.0],  # T8 apex (Laranjinha right-hander)
-        [2230.0,   145.0,    35.0,   758.0],  # Short chute to Pinheirinho
-        [2335.0,    45.0,    42.0,   759.5],  # T9 entry (Pinheirinho)
-        [2420.0,    -5.0,   115.0,   761.0],  # T9 apex (Pinheirinho tight left)
-        [2530.0,   -95.0,   145.0,   762.5],  # Approach to Bico de Pato
-        [2620.0,  -150.0,    95.0,   763.5],  # T10 apex (Bico de Pato tight right hairpin)
-        [2720.0,  -110.0,    10.0,   759.0],  # Exit T10 diving toward Mergulho
-        [2880.0,  -145.0,  -105.0,   751.5],  # T11 apex (Mergulho sweeping left downhill)
-        [3050.0,  -265.0,  -155.0,   746.5],  # Braking for Junção (T12)
-        [3145.0,  -345.0,  -115.0,   747.5],  # T12 apex (Junção left-hander)
-        [3300.0,  -335.0,    15.0,   754.0],  # Exit T12 starting steep uphill climb
-        [3520.0,  -255.0,   165.0,   764.5],  # T13 (Subida dos Boxes uphill left kink)
-        [3780.0,  -205.0,   315.0,   773.5],  # T14 (Arquibancadas sweeping left uphill)
-        [4040.0,  -295.0,   295.0,   778.5],  # Pit entry / main straight curve
-        [4309.0,  -420.0,   190.0,   781.0],  # Loop closure at Start / Finish
-    ], dtype=np.float64)
+    x_raw = np.append(_INTERLAGOS_GPS_X, _INTERLAGOS_GPS_X[0]).astype(np.float64)
+    y_raw = np.append(_INTERLAGOS_GPS_Y, _INTERLAGOS_GPS_Y[0]).astype(np.float64)
 
-    s_wp = waypoints[:, 0]
-    x_wp = waypoints[:, 1]
-    y_wp = waypoints[:, 2]
-    z_wp = waypoints[:, 3]
+    ds_raw = np.hypot(np.diff(x_raw), np.diff(y_raw))
+    s_raw = np.concatenate([[0.0], np.cumsum(ds_raw)])
+    s_raw = s_raw * (float(length_m) / s_raw[-1])
 
-    cs_x = CubicSpline(s_wp, x_wp, bc_type="periodic")
-    cs_y = CubicSpline(s_wp, y_wp, bc_type="periodic")
-    cs_z = CubicSpline(s_wp, z_wp, bc_type="periodic")
+    cs_x = CubicSpline(s_raw, x_raw, bc_type="periodic")
+    cs_y = CubicSpline(s_raw, y_raw, bc_type="periodic")
 
     s = np.arange(0, length_m + 1, 1, dtype=np.float64)
-    x = cs_x(s)
-    y = cs_y(s)
-    z = cs_z(s)
+    x = gaussian_filter1d(cs_x(s), sigma=6.0, mode="wrap")
+    y = gaussian_filter1d(cs_y(s), sigma=6.0, mode="wrap")
 
-    # Smooth coordinates slightly to ensure C2 continuity for track map & elevation
-    x = gaussian_filter1d(x, sigma=12.0, mode="wrap")
-    y = gaussian_filter1d(y, sigma=12.0, mode="wrap")
-    z = gaussian_filter1d(z, sigma=18.0, mode="wrap")
+    # Elevation profile [m ASL]: Steep downhill through Senna S (T1-T3) and Descida do Lago (T4-T5);
+    # technical infield undulations (T6-T11); steep uphill climb from Junção (T12) to Finish.
+    elev_waypoints = np.array([
+        [0.0,     781.5],  # Start / Finish line (climbing main straight)
+        [235.0,   785.0],  # T1 braking (Senna S crest - highest point)
+        [317.0,   776.5],  # T1 apex (steep downhill drop)
+        [423.0,   767.5],  # T2 apex (Senna S exit)
+        [600.0,   756.5],  # T3 Curva do Sol exit
+        [980.0,   750.5],  # Mid Reta Oposta
+        [1340.0,  746.5],  # End of Reta Oposta (T4 braking)
+        [1420.0,  743.0],  # T4 Descida do Lago
+        [1566.0,  742.0],  # T5 Descida do Lago exit (lowest point)
+        [1800.0,  751.5],  # Back climb toward Ferradura
+        [1990.0,  758.5],  # T6 Ferradura entry
+        [2130.0,  756.0],  # T7 Ferradura exit
+        [2304.0,  755.5],  # T8 Laranjinha
+        [2460.0,  760.5],  # T9 Pinheirinho
+        [2731.0,  763.5],  # T10 Bico de Pato
+        [2960.0,  751.0],  # T11 Mergulho diving left
+        [3224.0,  746.5],  # T12 Junção apex (bottom of main climb)
+        [3580.0,  762.5],  # T13 Subida dos Boxes (steep uphill climb)
+        [3950.0,  775.5],  # T14 Arquibancadas uphill sweep
+        [4309.0,  781.5],  # Finish line loop closure
+    ], dtype=np.float64)
 
-    # Compute tangent heading
+    cs_z = CubicSpline(elev_waypoints[:, 0], elev_waypoints[:, 1], bc_type="periodic")
+    z = gaussian_filter1d(cs_z(s), sigma=16.0, mode="wrap")
+
     dx = np.gradient(x, s)
     dy = np.gradient(y, s)
     heading_rad = np.unwrap(np.arctan2(dy, dx))
 
-    # Vertical slope sin(theta) = dz/ds
-    sin_theta = np.gradient(z, s)
-    sin_theta = np.clip(sin_theta, -0.095, 0.095)
+    sin_theta = np.clip(np.gradient(z, s), -0.095, 0.095)
 
-    # Construct high-precision calibrated curvature profile kappa(s) [1/m]
-    # Positive = Left turn, Negative = Right turn
-    # Calibrated to authentic Interlagos F1 corner apex speeds and radii:
+    # Calibrated corner curvature profile kappa(s) [1/m] aligned with GPS corner apexes
     kappa = np.zeros_like(s)
     corners = [
         # (name, apex_s, peak_kappa_1_m, half_width_m)
-        ("T1_SennaS_L",       245.0,  +0.0175,  38.0),  # ~108 km/h downhill left
-        ("T2_SennaS_R",       335.0,  -0.0128,  42.0),  # ~138 km/h right-hander
-        ("T3_CurvaDoSol_L",   535.0,  +0.0052,  85.0),  # ~225 km/h sweeping left
-        ("T4_Descida_L1",    1275.0,  +0.0102,  48.0),  # ~162 km/h left entry
-        ("T5_Descida_L2",    1365.0,  +0.0082,  52.0),  # ~188 km/h left exit
-        ("T6_Ferradura_R1",  1775.0,  -0.0096,  55.0),  # ~172 km/h right
-        ("T7_Ferradura_R2",  1885.0,  -0.0085,  50.0),  # ~182 km/h right exit
-        ("T8_Laranjinha_R",  2110.0,  -0.0148,  44.0),  # ~124 km/h medium-slow right
-        ("T9_Pinheirinho_L", 2405.0,  +0.0172,  42.0),  # ~110 km/h tight left
-        ("T10_BicoDePato_R", 2615.0,  -0.0205,  36.0),  # ~94 km/h slowest hairpin right
-        ("T11_Mergulho_L",   2880.0,  +0.0076,  62.0),  # ~195 km/h diving left
-        ("T12_Juncao_L",     3135.0,  +0.0168,  42.0),  # ~112 km/h crucial uphill left
-        ("T13_Subida_L",     3515.0,  +0.0028,  90.0),  # ~285 km/h flat-out uphill kink
-        ("T14_Arquibanc_L",  3840.0,  +0.0031, 120.0),  # ~305 km/h flat-out sweeping left
+        ("T1_SennaS_L",       317.0,  +0.0176,  38.0),
+        ("T2_SennaS_R",       423.0,  -0.0128,  42.0),
+        ("T3_CurvaDoSol_L",   595.0,  +0.0052,  85.0),
+        ("T4_Descida_L1",    1395.0,  +0.0102,  48.0),
+        ("T5_Descida_L2",    1555.0,  +0.0082,  52.0),
+        ("T6_Ferradura_R1",  1990.0,  -0.0096,  55.0),
+        ("T7_Ferradura_R2",  2125.0,  -0.0085,  50.0),
+        ("T8_Laranjinha_R",  2304.0,  -0.0148,  42.0),
+        ("T9_Pinheirinho_L", 2460.0,  +0.0172,  42.0),
+        ("T10_BicoDePato_R", 2731.0,  -0.0205,  36.0),
+        ("T11_Mergulho_L",   2955.0,  +0.0076,  62.0),
+        ("T12_Juncao_L",     3224.0,  +0.0168,  42.0),
+        ("T13_Subida_L",     3615.0,  +0.0028,  90.0),
+        ("T14_Arquibanc_L",  3955.0,  +0.0031, 110.0),
     ]
 
     for _, apex_s, k_peak, width_m in corners:
@@ -145,7 +129,7 @@ def _build_procedural_interlagos(length_m: int = 4309) -> TrackData:
 def load_interlagos_track(config_path: str = "config_brazil_2026.json", use_fastf1: bool = False) -> TrackData:
     """
     Loads the Interlagos track geometry. Attempts FastF1 cache if requested and available,
-    and falls back automatically to the calibrated procedural spline + elevation model.
+    and falls back automatically to the calibrated GPS closed-loop spline + elevation model.
     """
     length_m = 4309
     if os.path.exists(config_path):
@@ -159,7 +143,7 @@ def load_interlagos_track(config_path: str = "config_brazil_2026.json", use_fast
         try:
             import fastf1
             cache_dir = os.path.join(os.path.dirname(os.path.abspath(config_path)), ".fastf1_cache")
-            if os.path.exists(cache_dir):
+            if os.path.exists(cache_dir) and len(os.listdir(cache_dir)) > 0:
                 fastf1.Cache.enable_cache(cache_dir)
                 session = fastf1.get_session(2024, "São Paulo", "Q")
                 session.load(telemetry=True, weather=False, messages=False)
@@ -178,7 +162,6 @@ def load_interlagos_track(config_path: str = "config_brazil_2026.json", use_fast
                         base_track.z = gaussian_filter1d(z_interp, sigma=14.0, mode="wrap")
                         base_track.sin_theta = np.clip(np.gradient(base_track.z, s_grid), -0.095, 0.095)
         except Exception:
-            # Automatic fallback to procedural closed-loop spline
             pass
 
     return base_track
