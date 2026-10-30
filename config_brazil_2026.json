@@ -1,0 +1,121 @@
+{
+  "event": {
+    "title": "SÃO PAULO GRAND PRIX 2026",
+    "subtitle": "Autódromo José Carlos Pace - 4309 m - qualifying",
+    "watermark": "Priyanshu Pratik",
+    "year": 2026,
+    "gp_name": "São Paulo",
+    "session": "Q",
+    "circuit_length_m": 4309,
+    "altitude_m": 765.0,
+    "air_density_kg_m3": 1.110,
+    "target_lap_time_s": 68.450,
+    "target_sectors_s": {
+      "S1": 17.612,
+      "S2": 34.588,
+      "S3": 16.250
+    },
+    "sector_split_distances_m": {
+      "S1_end": 1165,
+      "S2_end": 3180,
+      "S3_end": 4309
+    }
+  },
+  "vehicle_2026": {
+    "mass_kg": 768.0,
+    "weight_distribution_front": 0.455,
+    "wheelbase_m": 3.40,
+    "track_width_front_m": 1.60,
+    "track_width_rear_m": 1.55,
+    "cg_height_m": 0.28,
+    "initial_speed_kmh": 308.0,
+    "max_speed_kmh": 344.0,
+    "gear_ratios_top_speed_kmh": [105, 142, 180, 218, 252, 284, 314, 350]
+  },
+  "power_unit_2026": {
+    "ice_max_power_kw": 400.0,
+    "fuel_energy_flow_limit_mj_h": 3000.0,
+    "fuel_lower_heating_value_mj_kg": 43.5,
+    "target_lap_fuel_kg": 0.925,
+    "soc_initial_mj": 3.10,
+    "soc_min_mj": 0.40,
+    "soc_max_mj": 4.00,
+    "mguk_max_deploy_kw": 350.0,
+    "mguk_taper_start_kmh": 290.0,
+    "mguk_taper_slope_kw_per_kmh": 6.36,
+    "mguk_max_harvest_overrun_kw": -350.0,
+    "mguk_part_throttle_min_kw": -50.0,
+    "mguk_part_throttle_max_kw": -260.0,
+    "mguk_superclip_kw": -250.0,
+    "mguk_superclip_duration_s": 1.8,
+    "mguk_deadband_kw": 5.0,
+    "target_superclip_total_mj": 0.65,
+    "superclip_zones_m": [
+      {
+        "name": "Reta Oposta End (Before T4)",
+        "start_m": 1035,
+        "end_m": 1190,
+        "power_kw": -250.0
+      },
+      {
+        "name": "Main Straight Climb (Before T1)",
+        "start_m": 4090,
+        "end_m": 4255,
+        "power_kw": -250.0
+      }
+    ]
+  },
+  "aerodynamics_2026": {
+    "reference_area_m2": 1.50,
+    "z_mode": {
+      "cl_base": 4.15,
+      "cd_base": 1.08,
+      "aero_balance_front_pct": 46.2
+    },
+    "x_mode": {
+      "drag_reduction_ratio": 0.52,
+      "downforce_reduction_ratio": 0.28,
+      "aero_balance_front_pct": 41.0,
+      "transition_time_s": 0.25,
+      "min_throttle_pct": 98.0,
+      "max_lat_g": 0.50,
+      "activation_zones_m": [
+        {
+          "name": "Reta Oposta (T3-T4)",
+          "start_m": 670,
+          "end_m": 1195
+        },
+        {
+          "name": "Arquibancadas / Main Straight (T13-T1)",
+          "start_m": 3470,
+          "end_m": 4260
+        },
+        {
+          "name": "Start Straight to T1 Braking",
+          "start_m": 0,
+          "end_m": 185
+        }
+      ]
+    }
+  },
+  "suspension_and_tires": {
+    "static_ride_height_front_mm": 42.0,
+    "static_ride_height_rear_mm": 90.0,
+    "min_ride_height_front_mm": 10.0,
+    "min_ride_height_rear_mm": 24.0,
+    "roll_gradient_deg_per_g": 0.42,
+    "pitch_gradient_deg_per_g": 0.38,
+    "tire_mu_long_peak": 1.95,
+    "tire_mu_lat_peak": 2.12,
+    "tire_load_sensitivity": 0.045,
+    "static_camber_front_deg": -3.1,
+    "static_camber_rear_deg": -1.6
+  },
+  "visual_3d_scale": {
+    "chassis_motion_multiplier": 2.5,
+    "window_size": [710, 560],
+    "camera_position": [-3.8, -2.6, 2.3],
+    "camera_focal_point": [0.0, 0.0, 0.25],
+    "camera_up": [0.0, 0.0, 1.0]
+  }
+}
