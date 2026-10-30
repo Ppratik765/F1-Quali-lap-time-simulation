@@ -175,6 +175,57 @@ class TelemetryResult:
         }
 
 
+def compute_air_density(cfg: Dict[str, Any]) -> float:
+    """
+    Computes ambient humid air density [kg/m^3] from altitude and forecast weather
+    using the barometric formula and Tetens equation for vapor pressure.
+    """
+    ev = cfg.get("event", {})
+    weather = ev.get("weather", {})
+    altitude_m = float(ev.get("altitude_m", 765.0))
+    temp_c = float(weather.get("ambient_temperature_c", 22.0))
+    p_sl_hpa = float(weather.get("sea_level_pressure_hpa", 1015.0))
+    rh = float(weather.get("relative_humidity", 0.55))
+
+    p_ambient_pa = (p_sl_hpa * 100.0) * ((1.0 - (0.0065 * altitude_m) / 288.15) ** 5.25588)
+    p_sat_pa = 610.78 * (10.0 ** ((7.5 * temp_c) / (temp_c + 237.3)))
+    p_v = rh * p_sat_pa
+    p_d = max(0.0, p_ambient_pa - p_v)
+    tk = temp_c + 273.15
+
+    r_dry = 287.058
+    r_vapor = 461.495
+    rho = (p_d / (r_dry * tk)) + (p_v / (r_vapor * tk))
+    return float(rho)
+
+
+def _fia_2026_mguk_max_kw(v_kmh: float, pu: Dict[str, Any]) -> float:
+    """
+    FIA 2026 Power Unit Technical Regulations Article 5.4.8 (i) MGU-K deployment limit [kW]:
+      - v < 290 km/h       : P_max = 350 kW
+      - 290 <= v < 340 km/h: P_max = 1800 - 5 * v_kmh
+      - 340 <= v < 345 km/h: P_max = 6900 - 20 * v_kmh
+      - v >= 345 km/h      : P_max = 0 kW
+    """
+    p_max = float(pu.get("mguk_max_deploy_kw", 350.0))
+    v1 = float(pu.get("mguk_taper_v1_kmh", 290.0))
+    v2 = float(pu.get("mguk_taper_v2_kmh", 340.0))
+    v3 = float(pu.get("mguk_taper_v3_kmh", 345.0))
+    c1 = float(pu.get("mguk_taper_c1_kw", 1800.0))
+    s1 = float(pu.get("mguk_taper_s1_kw_per_kmh", 5.0))
+    c2 = float(pu.get("mguk_taper_c2_kw", 6900.0))
+    s2 = float(pu.get("mguk_taper_s2_kw_per_kmh", 20.0))
+
+    if v_kmh < v1:
+        return p_max
+    elif v_kmh < v2:
+        return max(0.0, min(p_max, c1 - s1 * v_kmh))
+    elif v_kmh < v3:
+        return max(0.0, c2 - s2 * v_kmh)
+    else:
+        return 0.0
+
+
 def _solve_qss_velocity_profile(
     s: np.ndarray,
     kappa: np.ndarray,
@@ -197,7 +248,7 @@ def _solve_qss_velocity_profile(
     susp = cfg["suspension_and_tires"]
 
     m = float(veh["mass_kg"])
-    rho = float(cfg["event"]["air_density_kg_m3"])
+    rho = compute_air_density(cfg)
     area = float(aero["reference_area_m2"])
     v_ceil_ms = 120.0  # Numerical upper bound (432 km/h); actual top speed is emergent from drag & power
 
@@ -263,9 +314,6 @@ def _solve_qss_velocity_profile(
     # 3. Forward Pass (Acceleration with periodic boundary convergence v(0) == v(L))
     ice_kw = float(pu["ice_max_power_kw"]) + power_offset_kw
     mguk_max_kw = float(pu["mguk_max_deploy_kw"])
-    taper_start = float(pu["mguk_taper_start_kmh"])
-    taper_slope = float(pu["mguk_taper_slope_kw_per_kmh"])
-
     for _ in range(3):
         for i in range(n - 1):
             ds = s[i + 1] - s[i]
@@ -278,12 +326,9 @@ def _solve_qss_velocity_profile(
             f_grade = m * g * sin_theta[i]  # Positive uphill opposes acceleration
 
             if superclip_mask[i]:
-                p_mguk_kw = float(pu["mguk_superclip_kw"])
+                p_mguk_kw = float(pu.get("mguk_superclip_kw", -250.0))
             else:
-                if v_kmh <= taper_start:
-                    p_mguk_kw = mguk_max_kw
-                else:
-                    p_mguk_kw = max(0.0, mguk_max_kw - taper_slope * (v_kmh - taper_start))
+                p_mguk_kw = _fia_2026_mguk_max_kw(v_kmh, pu)
 
             p_total_w = (ice_kw + p_mguk_kw) * 1000.0 * 0.92
             f_power = p_total_w / max(20.0, v_curr)
@@ -426,7 +471,7 @@ def simulate_brazil_2026_lap(
     x_mode_fraction = gaussian_filter1d(x_mode_fraction, sigma=4.0, mode="nearest")
     x_mode_fraction = np.clip(x_mode_fraction, 0.0, 1.0)
 
-    rho = float(ev["air_density_kg_m3"])
+    rho = compute_air_density(cfg)
     area = float(aero["reference_area_m2"])
     cl_z = float(aero["z_mode"]["cl_base"])
     cd_z = float(aero["z_mode"]["cd_base"])
@@ -456,8 +501,6 @@ def simulate_brazil_2026_lap(
     mguk_power_kw = np.zeros_like(s)
     mguk_state = np.empty(n, dtype="<U12")
 
-    taper_start = float(pu["mguk_taper_start_kmh"])
-    taper_slope = float(pu["mguk_taper_slope_kw_per_kmh"])
     mguk_max_kw = float(pu["mguk_max_deploy_kw"])
 
     superclip_mask = np.zeros_like(s, dtype=bool)
@@ -483,11 +526,8 @@ def simulate_brazil_2026_lap(
             mguk_power_kw[i] = -50.0 - 190.0 * np.clip(pt_frac, 0.0, 1.0)
             mguk_state[i] = "HARVEST"
         else:
-            # Full-throttle deployment with 2026 FIA regulatory taper above 290 km/h: P = 350 - 6.36*(v - 290)
-            if vk <= taper_start:
-                p_dep = mguk_max_kw
-            else:
-                p_dep = max(95.0, mguk_max_kw - taper_slope * (vk - taper_start))
+            # Full-throttle deployment with FIA 2026 Article 5.4.8 (i) speed taper
+            p_dep = _fia_2026_mguk_max_kw(vk, pu)
             mguk_power_kw[i] = p_dep
             mguk_state[i] = "DEPLOY" if abs(p_dep) >= 5.0 else "OFF"
 
@@ -545,11 +585,13 @@ def simulate_brazil_2026_lap(
             dsoc = -(p_k / 1000.0) * dt_arr[i] * eff_rec
         soc_mj[i] = np.clip(soc_mj[i - 1] + dsoc, soc_min, soc_max)
 
-    # Fuel Used [kg] integrated from 3000 MJ/h limit (~0.925 kg over the lap)
-    target_fuel_kg = float(pu["target_lap_fuel_kg"])
-    fuel_rate = (ice_power_kw / ice_max_kw) * dt_arr
-    fuel_cum = np.cumsum(fuel_rate)
-    fuel_used_kg = fuel_cum * (target_fuel_kg / max(1e-6, fuel_cum[-1]))
+    # Fuel Used [kg] integrated directly from ICE chemical energy flow:
+    # m_dot_fuel = P_ice / (eta_th * LHV)
+    eta_ice = float(pu.get("ice_thermal_efficiency", 0.48))
+    lhv_mj_kg = float(pu.get("fuel_lower_heating_value_mj_kg", 43.5))
+    lhv_kj_kg = lhv_mj_kg * 1000.0  # 43500 kJ/kg
+    fuel_rate_kg_s = ice_power_kw / (eta_ice * lhv_kj_kg)
+    fuel_used_kg = np.cumsum(fuel_rate_kg_s * dt_arr)
     fuel_used_kg[0] = 0.0
 
     # 4-Corner Suspension, Ride Height & Tire Model
