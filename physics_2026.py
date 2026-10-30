@@ -275,9 +275,15 @@ def _solve_qss_velocity_profile(
     cla_eff = (cl_z * (1.0 - x_red_df * x_zone_mask)) * area
     cda_eff = (cd_z * (1.0 - x_red_dr * x_zone_mask)) * area
 
-    # Load-sensitive tyre model parameters
-    mu_lat_0 = float(susp["tire_mu_lat_peak"]) * (0.5 * front_grip_scale + 0.5 * rear_grip_scale)
-    mu_long_0 = float(susp["tire_mu_long_peak"]) * (0.5 * front_grip_scale + 0.5 * rear_grip_scale)
+    # Load-sensitive tyre model parameters with physical axle distribution
+    w_front = float(veh.get("weight_distribution_front", 0.455))
+    w_rear = 1.0 - w_front
+    bb_front = 0.56
+    bb_rear = 0.44
+
+    mu_lat_0 = float(susp["tire_mu_lat_peak"]) * (w_front * front_grip_scale + w_rear * rear_grip_scale)
+    mu_long_brake_0 = float(susp["tire_mu_long_peak"]) * (bb_front * front_grip_scale + bb_rear * rear_grip_scale)
+    mu_long_drive_0 = float(susp["tire_mu_long_peak"]) * rear_grip_scale
     alpha_load = float(susp.get("tire_load_sensitivity", 0.08))
     c_rr = float(susp.get("rolling_resistance_coeff", 0.012))
     eta_dt = float(pu.get("drivetrain_efficiency", 0.96))
@@ -290,9 +296,13 @@ def _solve_qss_velocity_profile(
         ratio = np.maximum(0.2, fz_total / (m * g))
         return mu_lat_0 * (ratio ** (-alpha_load))
 
-    def calc_mu_long(fz_total: np.ndarray) -> np.ndarray:
+    def calc_mu_long_brake(fz_total: np.ndarray) -> np.ndarray:
         ratio = np.maximum(0.2, fz_total / (m * g))
-        return mu_long_0 * (ratio ** (-alpha_load))
+        return mu_long_brake_0 * (ratio ** (-alpha_load))
+
+    def calc_mu_long_drive(fz_total: np.ndarray) -> np.ndarray:
+        ratio = np.maximum(0.2, fz_total / (m * g))
+        return mu_long_drive_0 * (ratio ** (-alpha_load))
 
     # 1. Apex Cornering Limit: m * v^2 * |kappa| = mu_lat(Fz) * (m*g*cos_theta + 0.5 * rho * CLA * v^2)
     abs_k = np.abs(kappa)
@@ -325,7 +335,7 @@ def _solve_qss_velocity_profile(
             f_grade = m * g * sin_theta[i]
 
             mu_lat_i = calc_mu_lat(fz)
-            mu_long_i = calc_mu_long(fz)
+            mu_long_i = calc_mu_long_brake(fz)
 
             a_lat_req = (v_next**2) * abs_k[i]
             a_lat_max = (mu_lat_i * fz) / m
@@ -355,7 +365,7 @@ def _solve_qss_velocity_profile(
             f_grade = m * g * sin_theta[i]
 
             mu_lat_i = calc_mu_lat(fz)
-            mu_long_i = calc_mu_long(fz)
+            mu_long_i = calc_mu_long_drive(fz)
 
             a_lat_req = (v_curr**2) * abs_k[i]
             a_lat_max = (mu_lat_i * fz) / m
@@ -735,7 +745,7 @@ def simulate_brazil_2026_lap(
     limited_grip_km = np.cumsum(is_grip_lim * ds_km)
 
     # 5-Parameter Lap Time Sensitivity Perturbation Calculator
-    # Compute perturbed velocity profiles and cumulative time deltas along the lap
+    # Runs the full QSS pipeline for each perturbation and computes honest delta-t(s) = t_pert(s) - t_base(s)
     perturbations = {
         "Power +10 kW":    {"power_offset_kw": 10.0},
         "Downforce +1%":   {"cl_scale": 1.01},
@@ -743,24 +753,12 @@ def simulate_brazil_2026_lap(
         "Front grip +1%":  {"front_grip_scale": 1.01},
         "Rear grip +1%":   {"rear_grip_scale": 1.01},
     }
-    target_full_deltas = {
-        "Power +10 kW":   -0.184,
-        "Downforce +1%":  -0.142,
-        "Drag -1%":       -0.068,
-        "Front grip +1%": -0.215,
-        "Rear grip +1%":  -0.298,
-    }
     sensitivity_deltas_s = {}
-    dt_base_cum = np.cumsum(1.0 / v_raw)
     for label, kwargs in perturbations.items():
         v_pert = _solve_qss_velocity_profile(s, kappa, sin_theta, cfg, **kwargs)
-        dt_pert_cum = np.cumsum(1.0 / v_pert)
-        raw_delta = dt_pert_cum - dt_base_cum
-        if abs(raw_delta[-1]) > 1e-5:
-            scaled_delta = raw_delta * (target_full_deltas[label] / raw_delta[-1])
-        else:
-            scaled_delta = (s / s[-1]) * target_full_deltas[label]
-        sensitivity_deltas_s[label] = scaled_delta
+        dt_pert_segments = ds_steps / (0.5 * (v_pert[:-1] + v_pert[1:]))
+        t_pert = np.concatenate([[0.0], np.cumsum(dt_pert_segments)])
+        sensitivity_deltas_s[label] = t_pert - t
 
     return TelemetryResult(
         s=s,
