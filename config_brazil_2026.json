@@ -8,12 +8,12 @@
     "session": "Q",
     "circuit_length_m": 4309,
     "altitude_m": 765.0,
-    "air_density_kg_m3": 1.110,
-    "target_lap_time_s": 70.840,
+    "air_density_kg_m3": 1.11,
+    "target_lap_time_s": 70.84,
     "target_sectors_s": {
       "S1": 18.285,
       "S2": 35.915,
-      "S3": 16.640
+      "S3": 16.64
     },
     "sector_split_distances_m": {
       "S1_end": 1165,
@@ -24,37 +24,45 @@
   "vehicle_2026": {
     "mass_kg": 768.0,
     "weight_distribution_front": 0.455,
-    "wheelbase_m": 3.40,
-    "track_width_front_m": 1.60,
+    "wheelbase_m": 3.4,
+    "track_width_front_m": 1.6,
     "track_width_rear_m": 1.55,
     "cg_height_m": 0.28,
     "initial_speed_kmh": 304.0,
     "max_speed_kmh": 322.0,
-    "gear_ratios_top_speed_kmh": [104, 144, 184, 224, 260, 294, 326, 355]
+    "gear_ratios_top_speed_kmh": [
+      104,
+      144,
+      184,
+      224,
+      260,
+      294,
+      326,
+      355
+    ]
   },
   "power_unit_2026": {
     "ice_max_power_kw": 400.0,
     "fuel_energy_flow_limit_mj_h": 3000.0,
     "fuel_lower_heating_value_mj_kg": 43.5,
     "target_lap_fuel_kg": 0.925,
-    "soc_initial_mj": 3.65,
-    "soc_min_mj": 0.00,
-    "soc_max_mj": 4.00,
+    "soc_initial_mj": 2.8,
+    "soc_min_mj": 0.25,
+    "soc_max_mj": 4.0,
     "mguk_max_deploy_kw": 350.0,
     "mguk_taper_start_kmh": 290.0,
     "mguk_taper_slope_kw_per_kmh": 6.36,
     "mguk_max_harvest_overrun_kw": -350.0,
     "mguk_part_throttle_min_kw": -50.0,
     "mguk_part_throttle_max_kw": -240.0,
-    "mguk_superclip_kw": 0.0,
-    "mguk_superclip_duration_s": 0.0,
+    "mguk_superclip_kw": -250.0,
+    "mguk_superclip_duration_s": 1.8,
     "mguk_deadband_kw": 5.0,
-    "target_superclip_total_mj": 0.00,
-    "superclip_zones_m": [],
-    "depletion_clip_start_m": 4040
+    "target_superclip_total_mj": 0.0,
+    "superclip_zones_m": []
   },
   "aerodynamics_2026": {
-    "reference_area_m2": 1.50,
+    "reference_area_m2": 1.5,
     "z_mode": {
       "cl_base": 2.68,
       "cd_base": 0.82,
@@ -66,7 +74,7 @@
       "aero_balance_front_pct": 41.0,
       "transition_time_s": 0.25,
       "min_throttle_pct": 98.0,
-      "max_lat_g": 0.50,
+      "max_lat_g": 0.5,
       "activation_zones_m": [
         {
           "name": "Reta Oposta (T3-T4)",
@@ -93,7 +101,7 @@
     "min_ride_height_rear_mm": 24.0,
     "roll_gradient_deg_per_g": 0.42,
     "pitch_gradient_deg_per_g": 0.38,
-    "tire_mu_long_peak": 1.90,
+    "tire_mu_long_peak": 1.9,
     "tire_mu_lat_peak": 2.02,
     "tire_load_sensitivity": 0.045,
     "static_camber_front_deg": -3.1,
@@ -101,9 +109,24 @@
   },
   "visual_3d_scale": {
     "chassis_motion_multiplier": 2.5,
-    "window_size": [710, 560],
-    "camera_position": [-3.8, -2.6, 2.3],
-    "camera_focal_point": [0.0, 0.0, 0.25],
-    "camera_up": [0.0, 0.0, 1.0]
+    "window_size": [
+      710,
+      560
+    ],
+    "camera_position": [
+      -3.8,
+      -2.6,
+      2.3
+    ],
+    "camera_focal_point": [
+      0.0,
+      0.0,
+      0.25
+    ],
+    "camera_up": [
+      0.0,
+      0.0,
+      1.0
+    ]
   }
 }

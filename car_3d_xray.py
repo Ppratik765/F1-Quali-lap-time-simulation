@@ -215,25 +215,25 @@ class F1XRayCarRenderer:
         for corner in ("FL", "FR", "RL", "RR"):
             self.arrow_tire_actors[corner] = self.plotter.add_mesh(
                 unit_arrow_up.copy(),
-                color="#D92632",
-                opacity=0.95,
+                color="#14161A",
+                opacity=1.0,
                 smooth_shading=True,
-                ambient=0.55,
+                ambient=0.65,
             )
 
         self.actor_arrow_downforce = self.plotter.add_mesh(
             unit_arrow_down.copy(),
-            color="#1E6AD4",
-            opacity=0.95,
+            color="#14161A",
+            opacity=1.0,
             smooth_shading=True,
-            ambient=0.55,
+            ambient=0.65,
         )
         self.actor_arrow_drag = self.plotter.add_mesh(
             unit_arrow_drag.copy(),
-            color="#1E6AD4",
-            opacity=0.95,
+            color="#14161A",
+            opacity=1.0,
             smooth_shading=True,
-            ambient=0.55,
+            ambient=0.65,
         )
 
     def render_frame(self, sample: Dict[str, Any]) -> Image.Image:

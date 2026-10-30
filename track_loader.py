@@ -86,25 +86,23 @@ def _build_procedural_interlagos(length_m: int = 4309) -> TrackData:
 
     sin_theta = np.clip(np.gradient(z, s), -0.095, 0.095)
 
-    # Calibrated corner curvature profile kappa(s) [1/m] aligned with GPS corner apexes
+    # Calibrated corner curvature profile kappa(s) [1/m] aligned with the 7 true Interlagos braking/cornering zones
+    # (Flat-out kinks T3 Curva do Sol, T5-T6 straight, and T13-T14 Subida/Arquibancadas have low curvature so the car stays 100% full throttle)
     kappa = np.zeros_like(s)
     corners = [
         # (name, apex_s, peak_kappa_1_m, half_width_m)
-        ("T1_SennaS_L",       312.0,  +0.0195,  32.0),
-        ("T2_SennaS_R",       420.0,  -0.0145,  36.0),
-        ("T3_CurvaDoSol_L",   575.0,  +0.0068,  65.0),
-        ("T4_Descida_L1",    1415.0,  +0.0118,  36.0),
-        ("T5_Descida_L2",    1545.0,  +0.0098,  42.0),
-        ("T5b_SubidaChute",  1740.0,  -0.0038,  65.0),
-        ("T6_Ferradura_R1",  1985.0,  -0.0115,  45.0),
-        ("T7_Ferradura_R2",  2120.0,  -0.0102,  44.0),
-        ("T8_Laranjinha_R",  2304.0,  -0.0165,  38.0),
-        ("T9_Pinheirinho_L", 2465.0,  +0.0192,  36.0),
-        ("T10_BicoDePato_R", 2731.0,  -0.0228,  32.0),
-        ("T11_Mergulho_L",   2955.0,  +0.0092,  52.0),
-        ("T12_Juncao_L",     3224.0,  +0.0188,  36.0),
-        ("T13_Subida_L",     3585.0,  +0.0024,  75.0),
-        ("T14_Arquibanc_L",  3890.0,  +0.0022,  80.0),
+        ("T1_SennaS_L",       312.0,  +0.0215,  30.0),
+        ("T2_SennaS_R",       385.0,  -0.0155,  28.0),
+        ("T3_CurvaDoSol_L",   575.0,  +0.0032,  65.0),
+        ("T4_Descida_L",     1425.0,  +0.0135,  42.0),
+        ("T6_Ferradura_R",   2075.0,  -0.0128,  42.0),
+        ("T8_Laranjinha_R",  2304.0,  -0.0175,  34.0),
+        ("T9_Pinheirinho_L", 2465.0,  +0.0205,  32.0),
+        ("T10_BicoDePato_R", 2731.0,  -0.0245,  30.0),
+        ("T11_Mergulho_L",   2945.0,  +0.0098,  34.0),
+        ("T12_Juncao_L",     3224.0,  +0.0205,  34.0),
+        ("T13_Subida_L",     3585.0,  +0.0014,  75.0),
+        ("T14_Arquibanc_L",  3890.0,  +0.0012,  80.0),
     ]
 
     for _, apex_s, k_peak, width_m in corners:
@@ -112,10 +110,10 @@ def _build_procedural_interlagos(length_m: int = 4309) -> TrackData:
         dist = np.minimum(dist, length_m - dist)
         kappa += k_peak * np.exp(-0.5 * (dist / width_m) ** 2)
 
-    # Zero out curvature on the straight braking/superclip zones (Reta Oposta & Main Straight)
-    kappa[(s >= 740) & (s <= 1320)] *= np.linspace(0.15, 0.0, 581)
-    kappa[(s >= 1120) & (s <= 1315)] = 0.0
-    kappa[(s >= 4060) | (s <= 230)] = 0.0
+    # Zero out curvature on the straight zones (Reta Oposta, T5-T6 straight, and Main Straight)
+    kappa[(s >= 720) & (s <= 1320)] = 0.0
+    kappa[(s >= 1530) & (s <= 1980)] = 0.0
+    kappa[(s >= 4040) | (s <= 230)] = 0.0
 
     corner_labels = {name: apex_s for name, apex_s, _, _ in corners}
 
