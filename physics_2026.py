@@ -573,8 +573,8 @@ def simulate_brazil_2026_lap(
     soc_max = float(pu["soc_max_mj"])
     dsoc_step = np.where(
         mguk_power_kw >= 0.0,
-        -(mguk_power_kw / 1000.0) * dt_arr * 0.48,
-        -(mguk_power_kw / 1000.0) * dt_arr * 0.88,
+        -(mguk_power_kw / 1000.0) * dt_arr * 0.78,
+        -(mguk_power_kw / 1000.0) * dt_arr * 0.68,
     )
     soc_mj = np.clip(soc_0 + np.cumsum(dsoc_step), soc_min, soc_max)
     soc_mj[0] = soc_0
