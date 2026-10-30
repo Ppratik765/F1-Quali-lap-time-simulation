@@ -384,7 +384,7 @@ def _solve_qss_velocity_profile(
             f_powertrain = p_wheel_w / max(12.0, v_curr)
 
             f_drive = min(f_traction_max, f_powertrain) - f_drag - f_roll - f_grade
-            a_accel = min(1.75 * g, max(0.01, f_drive / m))
+            a_accel = min(1.75 * g, f_drive / m)
             v_next_sq = max(100.0, v_curr**2 + 2.0 * a_accel * ds)
             v[i + 1] = min(v[i + 1], np.sqrt(v_next_sq))
         v[0] = min(v[0], v[-1])

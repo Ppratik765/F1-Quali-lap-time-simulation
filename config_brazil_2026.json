@@ -1,10 +1,10 @@
 {
   "event": {
-    "title": "SÃO PAULO GRAND PRIX 2026",
-    "subtitle": "Autódromo José Carlos Pace - 4309 m - qualifying",
+    "title": "S\u00c3O PAULO GRAND PRIX 2026",
+    "subtitle": "Aut\u00f3dromo Jos\u00e9 Carlos Pace - 4309 m - qualifying",
     "watermark": "Priyanshu Pratik",
     "year": 2026,
-    "gp_name": "São Paulo",
+    "gp_name": "S\u00e3o Paulo",
     "session": "Q",
     "circuit_length_m": 4309,
     "altitude_m": 765.0,
@@ -79,15 +79,15 @@
     "drivetrain_efficiency": 0.96
   },
   "aerodynamics_2026": {
-    "reference_area_m2": 1.5,
+    "reference_area_m2": 1.6,
     "z_mode": {
-      "cl_base": 2.68,
-      "cd_base": 0.82,
+      "cl_base": 2.48,
+      "cd_base": 1.05,
       "aero_balance_front_pct": 46.2
     },
     "x_mode": {
-      "drag_reduction_ratio": 0.52,
-      "downforce_reduction_ratio": 0.28,
+      "drag_reduction_ratio": 0.36,
+      "downforce_reduction_ratio": 0.38,
       "aero_balance_front_pct": 41.0,
       "transition_time_s": 0.25,
       "min_throttle_pct": 98.0,
@@ -118,9 +118,9 @@
     "min_ride_height_rear_mm": 24.0,
     "roll_gradient_deg_per_g": 0.42,
     "pitch_gradient_deg_per_g": 0.38,
-    "tire_mu_long_peak": 1.9,
-    "tire_mu_lat_peak": 2.02,
-    "tire_load_sensitivity": 0.045,
+    "tire_mu_long_peak": 1.91,
+    "tire_mu_lat_peak": 1.83,
+    "tire_load_sensitivity": 0.075,
     "static_camber_front_deg": -3.1,
     "static_camber_rear_deg": -1.6,
     "rolling_resistance_coeff": 0.012,
