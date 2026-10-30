@@ -42,8 +42,10 @@ def _find_diagnostic_timestamps(tel: TelemetryResult) -> dict:
     else:
         idx_br = int(np.argmax(tel.brake_pct))
 
-    # 3. High-G cornering (around Ferradura / Laranjinha / Pinheirinho / Descida do Lago)
-    cr_indices = np.where((np.abs(tel.lat_g) >= 2.2) & (tel.s >= 1400) & (tel.s <= 2600))[0]
+    # 3. High-G cornering exit (DEPLOY state, high lateral G, inside front tire unloaded)
+    cr_indices = np.where(
+        (tel.mguk_state == "DEPLOY") & (np.abs(tel.lat_g) >= 1.8) & (tel.s >= 1400) & (tel.s <= 3260)
+    )[0]
     if len(cr_indices) > 0:
         idx_cr = int(cr_indices[int(len(cr_indices) * 0.55)])
     else:
@@ -196,8 +198,8 @@ def main() -> None:
             render_video_pipe(
                 output_path="preview_brazil_2026.mp4",
                 fps=30,
-                t_start=0.0,
-                t_end=10.0,
+                t_start=11.0,
+                t_end=21.0,
                 outro_hold_s=0.0,
                 tel=tel,
                 car_renderer=car_renderer,

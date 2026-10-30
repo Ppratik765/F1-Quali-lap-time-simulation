@@ -52,15 +52,15 @@
     "target_superclip_total_mj": 0.65,
     "superclip_zones_m": [
       {
-        "name": "Main Straight Climb (Before T1)",
-        "start_m": 80,
-        "end_m": 225,
-        "power_kw": -250.0
-      },
-      {
         "name": "Reta Oposta End (Before T4)",
         "start_m": 1145,
         "end_m": 1305,
+        "power_kw": -250.0
+      },
+      {
+        "name": "Main Straight Climb (Before T1)",
+        "start_m": 4095,
+        "end_m": 4255,
         "power_kw": -250.0
       }
     ]
@@ -68,8 +68,8 @@
   "aerodynamics_2026": {
     "reference_area_m2": 1.50,
     "z_mode": {
-      "cl_base": 4.15,
-      "cd_base": 1.08,
+      "cl_base": 2.68,
+      "cd_base": 0.78,
       "aero_balance_front_pct": 46.2
     },
     "x_mode": {

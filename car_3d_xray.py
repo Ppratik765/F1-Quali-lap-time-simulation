@@ -109,25 +109,22 @@ class F1XRayCarRenderer:
         # camera.position = [(-3.8, -2.6, 2.3), (0.0, 0.0, 0.25), (0.0, 0.0, 1.0)],
         # the car and its 6 force arrows sit cleanly between the RR/RL and FR/FL telemetry blocks.
         self.base_yaw_rad = np.radians(-153.5)
-        self.model_scale = 0.80
+        self.model_scale = 0.85
         c, s = np.cos(self.base_yaw_rad), np.sin(self.base_yaw_rad)
         sc = self.model_scale
         self.R_base = np.array([
             [c * sc, -s * sc, 0.0, 0.0],
             [s * sc,  c * sc, 0.0, 0.0],
-            [0.0,     0.0,    sc,  0.24],
+            [0.0,     0.0,    sc,  0.19],
             [0.0,     0.0,    0.0, 1.0],
         ], dtype=np.float64)
 
         self.plotter = pv.Plotter(off_screen=True, window_size=self.window_size)
         self.plotter.set_background("#08080A")
         try:
-            self.plotter.enable_anti_aliasing("ssaa")
+            self.plotter.enable_anti_aliasing("msaa")
         except Exception:
-            try:
-                self.plotter.enable_anti_aliasing("msaa")
-            except Exception:
-                pass
+            pass
 
         # Exact camera specification from Section 4
         self.plotter.camera.position = [(-3.8, -2.6, 2.3), (0.0, 0.0, 0.25), (0.0, 0.0, 1.0)][0]

@@ -405,12 +405,12 @@ def simulate_brazil_2026_lap(
     for i in range(n):
         if long_g[i] < -0.32:
             # Braking zone
-            brake_pct[i] = np.clip((-long_g[i] - 0.15) / 4.2 * 100.0, 5.0, 100.0)
+            brake_pct[i] = np.clip((-long_g[i] - 0.15) / 4.0 * 100.0, 8.0, 100.0)
             throttle_pct[i] = 0.0
-        elif np.abs(lat_g[i]) > 1.85 and long_g[i] < 0.45:
-            # Technical corner part-throttle modulation (T2, T6-T11, T12)
-            part = 68.0 - 14.0 * (np.abs(lat_g[i]) - 1.85) + 25.0 * long_g[i]
-            throttle_pct[i] = np.clip(part, 15.0, 62.0)
+        elif np.abs(lat_g[i]) > 1.25 and long_g[i] < 0.72 and (250.0 <= s[i] <= 3320.0):
+            # Technical corner part-throttle modulation (T1-T2, T4-T5, T6-T11, T12)
+            part = 58.0 - 14.0 * (np.abs(lat_g[i]) - 1.25) + 18.0 * long_g[i]
+            throttle_pct[i] = np.clip(part, 18.0, 62.0)
             brake_pct[i] = 0.0
         else:
             throttle_pct[i] = 100.0
@@ -422,14 +422,14 @@ def simulate_brazil_2026_lap(
         throttle_pct[mask_sc] = 100.0
         brake_pct[mask_sc] = 0.0
 
-    throttle_pct = np.clip(gaussian_filter1d(throttle_pct, sigma=2.5, mode="nearest"), 0.0, 100.0)
+    throttle_pct = np.clip(gaussian_filter1d(throttle_pct, sigma=2.0, mode="nearest"), 0.0, 100.0)
     brake_pct = np.clip(gaussian_filter1d(brake_pct, sigma=2.0, mode="nearest"), 0.0, 100.0)
     # Re-pin 100% throttle in superclip zones and start/finish
     for sc in pu["superclip_zones_m"]:
         mask_sc = (s >= sc["start_m"]) & (s <= sc["end_m"])
         throttle_pct[mask_sc] = 100.0
         brake_pct[mask_sc] = 0.0
-    throttle_pct[throttle_pct > 96.5] = 100.0
+    throttle_pct[throttle_pct > 95.0] = 100.0
     throttle_pct[brake_pct > 5.0] = 0.0
     brake_pct[throttle_pct > 5.0] = 0.0
 
@@ -571,7 +571,11 @@ def simulate_brazil_2026_lap(
     soc_0 = float(pu["soc_initial_mj"])
     soc_min = float(pu["soc_min_mj"])
     soc_max = float(pu["soc_max_mj"])
-    dsoc_step = -(mguk_power_kw / 1000.0) * dt_arr * 0.42  # effective ES net depletion/recovery scaling
+    dsoc_step = np.where(
+        mguk_power_kw >= 0.0,
+        -(mguk_power_kw / 1000.0) * dt_arr * 0.48,
+        -(mguk_power_kw / 1000.0) * dt_arr * 0.88,
+    )
     soc_mj = np.clip(soc_0 + np.cumsum(dsoc_step), soc_min, soc_max)
     soc_mj[0] = soc_0
 
@@ -588,10 +592,10 @@ def simulate_brazil_2026_lap(
     rh_f_min = float(susp["min_ride_height_front_mm"])
     rh_r_min = float(susp["min_ride_height_rear_mm"])
 
-    df_norm = np.clip(downforce_kg / 1850.0, 0.0, 1.0)
+    df_norm = np.clip(downforce_kg / 1450.0, 0.0, 1.0)
     # Ride height compresses with downforce and pitches under braking/acceleration
-    ride_height_front_mm = rh_f_static - (rh_f_static - rh_f_min) * (df_norm ** 0.85) + 2.4 * long_g
-    ride_height_rear_mm = rh_r_static - (rh_r_static - rh_r_min) * (df_norm ** 0.85) - 3.2 * long_g
+    ride_height_front_mm = rh_f_static - (rh_f_static - rh_f_min) * (df_norm ** 0.92) + 2.2 * long_g
+    ride_height_rear_mm = rh_r_static - (rh_r_static - rh_r_min) * (df_norm ** 0.92) - 3.0 * long_g
     ride_height_front_mm = np.clip(ride_height_front_mm, rh_f_min, rh_f_static + 4.0)
     ride_height_rear_mm = np.clip(ride_height_rear_mm, rh_r_min, rh_r_static + 5.0)
 
@@ -600,6 +604,7 @@ def simulate_brazil_2026_lap(
     pitch_deg = np.clip(-long_g * float(susp["pitch_gradient_deg_per_g"]) - 0.35 * df_norm, -1.8, 1.5)
 
     # 4-Corner Vertical Tire Loads Fz [kN] (FL, FR, RL, RR)
+    # Allows inside front wheel unloading down to 0.0-0.3 kN in tight high-G corners
     m = float(veh["mass_kg"])
     wf = float(veh["weight_distribution_front"])
     h_cg = float(veh["cg_height_m"])
@@ -610,14 +615,14 @@ def simulate_brazil_2026_lap(
     f_total_front_n = m * g * wf + downforce_n * (aero_balance_pct / 100.0) - (m * g * long_g) * (h_cg / wb)
     f_total_rear_n = m * g * (1.0 - wf) + downforce_n * (1.0 - aero_balance_pct / 100.0) + (m * g * long_g) * (h_cg / wb)
 
-    # Lateral load transfer (positive lat_g = left turn -> unloads Left tires, loads Right tires)
-    df_lat_front_n = (m * g * lat_g) * (h_cg / tw_f) * 0.56
-    df_lat_rear_n = (m * g * lat_g) * (h_cg / tw_r) * 0.44
+    # Front-biased roll stiffness distribution causes inside front tire unloading in tight corners
+    df_lat_front_n = (m * g * lat_g) * (h_cg / tw_f) * 1.48
+    df_lat_rear_n = (m * g * lat_g) * (h_cg / tw_r) * 0.92
 
-    fz_fl_kn = np.clip((0.5 * f_total_front_n - df_lat_front_n) / 1000.0, 0.05, 8.5)
-    fz_fr_kn = np.clip((0.5 * f_total_front_n + df_lat_front_n) / 1000.0, 0.05, 8.5)
-    fz_rl_kn = np.clip((0.5 * f_total_rear_n - df_lat_rear_n) / 1000.0, 0.25, 9.5)
-    fz_rr_kn = np.clip((0.5 * f_total_rear_n + df_lat_rear_n) / 1000.0, 0.25, 9.5)
+    fz_fl_kn = np.clip((0.5 * f_total_front_n - df_lat_front_n) / 1000.0, 0.10, 8.5)
+    fz_fr_kn = np.clip((0.5 * f_total_front_n + df_lat_front_n) / 1000.0, 0.10, 8.5)
+    fz_rl_kn = np.clip((0.5 * f_total_rear_n - df_lat_rear_n) / 1000.0, 0.40, 9.5)
+    fz_rr_kn = np.clip((0.5 * f_total_rear_n + df_lat_rear_n) / 1000.0, 0.40, 9.5)
 
     # Dynamic Camber gamma [deg] & Slip Angle phi [deg]
     cam_f0 = float(susp["static_camber_front_deg"])
