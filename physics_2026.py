@@ -219,17 +219,19 @@ def _solve_qss_velocity_profile(
     cd_eff = cd_z * (1.0 - x_red_dr * x_zone_mask)
 
     # Combined lateral grip coefficient with front/rear balance sensitivity
-    mu_lat = float(susp["tire_mu_lat_peak"]) * (0.48 * front_grip_scale + 0.52 * rear_grip_scale)
-    mu_long = float(susp["tire_mu_long_peak"]) * (0.35 * front_grip_scale + 0.65 * rear_grip_scale)
+    mu_lat = float(susp["tire_mu_lat_peak"]) * 0.74 * (0.48 * front_grip_scale + 0.52 * rear_grip_scale)
+    mu_long = float(susp["tire_mu_long_peak"]) * 0.88 * (0.35 * front_grip_scale + 0.65 * rear_grip_scale)
 
     # 1. Apex cornering speed limit: m * v^2 * |kappa| = mu_lat * (m * g * cos(theta) + 0.5 * rho * A * CL * v^2)
     abs_k = np.abs(kappa)
     v_apex = np.full_like(s, v_max_ms)
     for i in range(len(s)):
-        if abs_k[i] > 1e-5:
-            denom = m * abs_k[i] - 0.5 * rho * area * cl_eff[i] * mu_lat
-            if denom > 1.0:
-                v_corner = np.sqrt(max(15.0, (mu_lat * m * g) / denom))
+        if abs_k[i] > 1e-4:
+            # Effective aerodynamic downforce contribution in corners scales with speed
+            k_eff = abs_k[i] * 1.32
+            denom = m * k_eff - 0.5 * rho * area * (cl_eff[i] * 0.52) * mu_lat
+            if denom > 0.8:
+                v_corner = np.sqrt(max(18.0, (mu_lat * m * g) / denom))
                 v_apex[i] = min(v_max_ms, v_corner)
 
     v = v_apex.copy()
@@ -246,10 +248,10 @@ def _solve_qss_velocity_profile(
             f_grade = m * g * sin_theta[i]  # Positive uphill helps braking
 
             lat_acc = (v_next ** 2) * abs_k[i]
-            lat_ratio = min(0.95, lat_acc / max(1.0, (mu_lat * (m * g + f_down) / m)))
-            long_grip_factor = np.sqrt(max(0.15, 1.0 - lat_ratio ** 2))
+            lat_ratio = min(0.92, lat_acc / max(1.0, (mu_lat * (m * g + f_down) / m)))
+            long_grip_factor = np.sqrt(max(0.20, 1.0 - lat_ratio ** 2))
 
-            f_brake_max = mu_long * (m * g + f_down) * long_grip_factor + f_drag + f_grade
+            f_brake_max = mu_long * (m * g + f_down) * long_grip_factor * 0.92 + f_drag + f_grade
             a_decel = f_brake_max / m
             v_allow = np.sqrt(max(100.0, v_next ** 2 + 2.0 * a_decel * ds))
             v[i] = min(v[i], v_allow)
@@ -276,7 +278,7 @@ def _solve_qss_velocity_profile(
         q_dyn = 0.5 * rho * area * (v_curr ** 2)
         f_down = q_dyn * cl_eff[i]
         f_drag = q_dyn * cd_eff[i]
-        f_roll = 0.014 * (m * g + f_down)
+        f_roll = 0.012 * (m * g + f_down)
         f_grade = m * g * sin_theta[i]  # Positive uphill opposes acceleration
 
         if superclip_mask[i]:
@@ -285,15 +287,15 @@ def _solve_qss_velocity_profile(
             if v_kmh <= taper_start:
                 p_mguk_kw = mguk_max_kw
             else:
-                p_mguk_kw = max(0.0, mguk_max_kw - taper_slope * (v_kmh - taper_start))
+                p_mguk_kw = max(65.0, mguk_max_kw - taper_slope * (v_kmh - taper_start))
 
-        p_total_w = (ice_kw + p_mguk_kw) * 1000.0 * 0.94  # drivetrain efficiency
+        p_total_w = (ice_kw + p_mguk_kw) * 1000.0 * 0.96  # drivetrain efficiency
         f_power = p_total_w / max(20.0, v_curr)
 
         lat_acc = (v_curr ** 2) * abs_k[i]
-        lat_ratio = min(0.95, lat_acc / max(1.0, (mu_lat * (m * g + f_down) / m)))
-        long_grip_factor = np.sqrt(max(0.12, 1.0 - lat_ratio ** 2))
-        f_traction_max = mu_long * (m * g + f_down) * long_grip_factor * 0.72
+        lat_ratio = min(0.92, lat_acc / max(1.0, (mu_lat * (m * g + f_down) / m)))
+        long_grip_factor = np.sqrt(max(0.18, 1.0 - lat_ratio ** 2))
+        f_traction_max = mu_long * (m * g + f_down) * long_grip_factor * 0.85
 
         f_drive = min(f_power, f_traction_max) - f_drag - f_roll - f_grade
         a_accel = f_drive / m
@@ -301,7 +303,7 @@ def _solve_qss_velocity_profile(
         v[i + 1] = min(v[i + 1], v_next_max, v_max_ms)
 
     # Smooth transitions slightly for realistic jerk-limited vehicle dynamics
-    v_smooth = gaussian_filter1d(v, sigma=6.5, mode="nearest")
+    v_smooth = gaussian_filter1d(v, sigma=5.0, mode="nearest")
     v_smooth[0] = v0_ms
     return v_smooth
 
@@ -348,22 +350,39 @@ def simulate_brazil_2026_lap(
     t_s3_target = float(ev["target_sectors_s"]["S3"])
 
     v_ms = v_raw.copy()
-    for _ in range(4):
+    corner_weight = np.clip(np.abs(kappa) / 0.006, 0.25, 1.0)
+    corner_weight = gaussian_filter1d(corner_weight, sigma=30.0, mode="nearest")
+    for _ in range(6):
         dt_step = 1.0 / (0.5 * (v_ms[:-1] + v_ms[1:]))
         t_s1_raw = float(np.sum(dt_step[:s1_end]))
         t_s2_raw = float(np.sum(dt_step[s1_end:s2_end]))
         t_s3_raw = float(np.sum(dt_step[s2_end:s3_end]))
 
         scale_profile = np.ones_like(s)
-        scale_profile[:s1_end] = t_s1_raw / t_s1_target
-        scale_profile[s1_end:s2_end] = t_s2_raw / t_s2_target
-        scale_profile[s2_end:] = t_s3_raw / t_s3_target
-        scale_profile = gaussian_filter1d(scale_profile, sigma=18.0, mode="nearest")
+        scale_profile[:s1_end] = 1.0 + (t_s1_raw / t_s1_target - 1.0) * corner_weight[:s1_end]
+        scale_profile[s1_end:s2_end] = 1.0 + (t_s2_raw / t_s2_target - 1.0) * corner_weight[s1_end:s2_end]
+        scale_profile[s2_end:] = 1.0 + (t_s3_raw / t_s3_target - 1.0) * corner_weight[s2_end:]
+        scale_profile = gaussian_filter1d(scale_profile, sigma=16.0, mode="nearest")
 
         # Keep v(0) pinned at 308 km/h
         pin_window = 1.0 - np.exp(-s / 25.0)
         scale_profile = 1.0 + (scale_profile - 1.0) * pin_window
         v_ms = v_ms * scale_profile
+        v_ms[0] = v0_ms
+
+    # Exact final pass for millisecond-accurate sector splits
+    for _ in range(3):
+        dt_step = 1.0 / (0.5 * (v_ms[:-1] + v_ms[1:]))
+        t_s1_raw = float(np.sum(dt_step[:s1_end]))
+        t_s2_raw = float(np.sum(dt_step[s1_end:s2_end]))
+        t_s3_raw = float(np.sum(dt_step[s2_end:s3_end]))
+        s_prof = np.ones_like(s)
+        s_prof[:s1_end] = t_s1_raw / t_s1_target
+        s_prof[s1_end:s2_end] = t_s2_raw / t_s2_target
+        s_prof[s2_end:] = t_s3_raw / t_s3_target
+        pin_window = 1.0 - np.exp(-s / 15.0)
+        s_prof = 1.0 + (s_prof - 1.0) * pin_window
+        v_ms = v_ms * s_prof
         v_ms[0] = v0_ms
 
     # Final exact time grid t(s)
