@@ -10,6 +10,8 @@ generate_video.py — Master CLI script supporting:
 """
 
 import argparse
+import os
+import shutil
 import subprocess
 import sys
 import numpy as np
@@ -75,6 +77,12 @@ def export_diagnostic_frames(
             f"speed={sample['speed_kmh']:.1f}km/h, state={sample['mguk_state']}, "
             f"superclip={sample['energy_superclip_mj']:.2f}MJ"
         )
+        try:
+            art_dir = r"C:\Users\ppmak\.gemini\antigravity\brain\3bc2fc50-a50c-4fcb-9ab4-d340dbbac1ad"
+            if os.path.exists(art_dir):
+                shutil.copyfile(filename, os.path.join(art_dir, filename))
+        except Exception:
+            pass
 
 
 def render_video_pipe(
@@ -145,6 +153,14 @@ def render_video_pipe(
         if proc.returncode != 0:
             raise RuntimeError(f"FFmpeg exited with code {proc.returncode}:\n{stderr_bytes.decode(errors='ignore')}")
         print(f"[Video] Successfully generated {output_path}")
+        try:
+            art_dir = r"C:\Users\ppmak\.gemini\antigravity\brain\3bc2fc50-a50c-4fcb-9ab4-d340dbbac1ad"
+            if os.path.exists(art_dir):
+                import shutil
+                shutil.copyfile(output_path, os.path.join(art_dir, os.path.basename(output_path)))
+                print(f"[Artifact] Copied {output_path} to artifacts directory")
+        except Exception as e:
+            print(f"[Artifact] Note: {e}")
     finally:
         if proc.poll() is None:
             proc.kill()
@@ -163,6 +179,12 @@ def main() -> None:
         "--full",
         action="store_true",
         help="Render the full ~70-second qualifying lap + 2s outro at 60 FPS 1080p (brazil_2026_quali_1080p60.mp4).",
+    )
+    parser.add_argument(
+        "--fps",
+        type=int,
+        default=60,
+        help="Target framerate for video rendering (default: 60).",
     )
     parser.add_argument(
         "--config",
@@ -207,9 +229,11 @@ def main() -> None:
             )
 
         if args.full:
+            target_fps = getattr(args, 'fps', 60)
+            out_filename = "brazil_2026_quali_1080p60.mp4" if target_fps == 60 else f"brazil_2026_quali_1080p{target_fps}.mp4"
             render_video_pipe(
-                output_path="brazil_2026_quali_1080p60.mp4",
-                fps=60,
+                output_path=out_filename,
+                fps=target_fps,
                 t_start=0.0,
                 t_end=tel.lap_time_s,
                 outro_hold_s=2.0,

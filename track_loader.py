@@ -114,9 +114,15 @@ def _load_or_fetch_real_telemetry(cache_file: str, length_m: int = 4309) -> tupl
     y_smooth = gaussian_filter1d(cs_y(s_grid), sigma=7.0, mode="wrap")
     z_smooth = gaussian_filter1d(cs_z(s_grid), sigma=12.0, mode="wrap")
 
+    # Rotate 2D coordinates by +81.5 deg to maintain the authentic horizontal broadcast track map orientation
+    theta_rad = np.radians(81.5)
+    c, sn = np.cos(theta_rad), np.sin(theta_rad)
+    x_rot = (x_smooth - x_smooth[0]) * c - (y_smooth - y_smooth[0]) * sn
+    y_rot = (x_smooth - x_smooth[0]) * sn + (y_smooth - y_smooth[0]) * c
+
     os.makedirs(os.path.dirname(os.path.abspath(cache_file)), exist_ok=True)
-    np.savez_compressed(cache_file, s=s_grid, x=x_smooth, y=y_smooth, z=z_smooth)
-    return s_grid, x_smooth, y_smooth, z_smooth
+    np.savez_compressed(cache_file, s=s_grid, x=x_rot, y=y_rot, z=z_smooth)
+    return s_grid, x_rot, y_rot, z_smooth
 
 
 def load_interlagos_track(
