@@ -28,12 +28,12 @@ def _find_diagnostic_timestamps(tel: TelemetryResult) -> dict:
       2. frame_02_braking.png   : Heavy braking zone (HARVEST Overrun, -350 kW, nose dive)
       3. frame_03_cornering.png : High-G technical cornering / apex exit
     """
-    # 1. Superclip on Reta Oposta (around s = 1265 m where Superclip MJ bar is clearly visible)
-    sc_indices = np.where((tel.mguk_state == "SUPERCLIP") & (tel.s >= 1150) & (tel.s <= 1300))[0]
+    # 1. End-of-lap General Depletion Clipping (s >= 4040m where SOC=0.00 MJ and MGU-K=0 kW OFF)
+    sc_indices = np.where((tel.mguk_state == "OFF") & (tel.s >= 4040))[0]
     if len(sc_indices) > 0:
-        idx_sc = int(sc_indices[int(len(sc_indices) * 0.78)])
+        idx_sc = int(sc_indices[int(len(sc_indices) * 0.55)])
     else:
-        idx_sc = int(np.where(tel.mguk_state == "SUPERCLIP")[0][-1])
+        idx_sc = 1220
 
     # 2. Heavy braking (into Descida do Lago T4 or Bico de Pato T10)
     br_indices = np.where((tel.brake_pct >= 80.0) & (tel.s >= 1310) & (tel.s <= 2800))[0]

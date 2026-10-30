@@ -28,8 +28,8 @@
     "track_width_front_m": 1.60,
     "track_width_rear_m": 1.55,
     "cg_height_m": 0.28,
-    "initial_speed_kmh": 301.0,
-    "max_speed_kmh": 320.0,
+    "initial_speed_kmh": 304.0,
+    "max_speed_kmh": 322.0,
     "gear_ratios_top_speed_kmh": [104, 144, 184, 224, 260, 294, 326, 355]
   },
   "power_unit_2026": {
@@ -37,33 +37,21 @@
     "fuel_energy_flow_limit_mj_h": 3000.0,
     "fuel_lower_heating_value_mj_kg": 43.5,
     "target_lap_fuel_kg": 0.925,
-    "soc_initial_mj": 2.95,
-    "soc_min_mj": 0.45,
+    "soc_initial_mj": 3.65,
+    "soc_min_mj": 0.00,
     "soc_max_mj": 4.00,
     "mguk_max_deploy_kw": 350.0,
     "mguk_taper_start_kmh": 290.0,
     "mguk_taper_slope_kw_per_kmh": 6.36,
     "mguk_max_harvest_overrun_kw": -350.0,
     "mguk_part_throttle_min_kw": -50.0,
-    "mguk_part_throttle_max_kw": -260.0,
-    "mguk_superclip_kw": -250.0,
-    "mguk_superclip_duration_s": 1.8,
+    "mguk_part_throttle_max_kw": -240.0,
+    "mguk_superclip_kw": 0.0,
+    "mguk_superclip_duration_s": 0.0,
     "mguk_deadband_kw": 5.0,
-    "target_superclip_total_mj": 0.65,
-    "superclip_zones_m": [
-      {
-        "name": "Reta Oposta End (Low-SOC Superclip Before T4)",
-        "start_m": 1150,
-        "end_m": 1305,
-        "power_kw": -250.0
-      },
-      {
-        "name": "Main Straight Climb (Low-SOC Superclip Before Finish)",
-        "start_m": 4085,
-        "end_m": 4255,
-        "power_kw": -250.0
-      }
-    ]
+    "target_superclip_total_mj": 0.00,
+    "superclip_zones_m": [],
+    "depletion_clip_start_m": 4040
   },
   "aerodynamics_2026": {
     "reference_area_m2": 1.50,

@@ -52,7 +52,7 @@ class F1XRayCarRenderer:
         ], dtype=np.float64)
 
         self.plotter = pv.Plotter(off_screen=True, window_size=self.window_size)
-        self.plotter.set_background("#08080A")
+        self.plotter.set_background("#F3EFE6")
         try:
             self.plotter.enable_anti_aliasing("msaa")
         except Exception:
@@ -105,28 +105,28 @@ class F1XRayCarRenderer:
         body_path = os.path.join(self.assets_dir, "f1_body.vtp")
         susp_path = os.path.join(self.assets_dir, "f1_susp.vtp")
 
-        # 1. Smoked-Glass F1 CAD Bodywork (#B8C0CC, opacity=0.31)
+        # 1. Smoked-Graphite Translucent F1 CAD Bodywork (#303642, opacity=0.35)
         body_mesh = pv.read(body_path)
         self.actor_body = self.plotter.add_mesh(
             body_mesh,
-            color="#B8C0CC",
-            opacity=0.31,
+            color="#303642",
+            opacity=0.35,
             smooth_shading=True,
-            specular=0.85,
-            specular_power=45,
-            ambient=0.16,
+            specular=0.75,
+            specular_power=42,
+            ambient=0.22,
         )
 
         # 2. Real CAD Aero-Section Suspension Wishbones & Pushrods
         susp_mesh = pv.read(susp_path)
         self.actor_susp = self.plotter.add_mesh(
             susp_mesh,
-            color="#C8D0DC",
-            opacity=0.92,
+            color="#1A202C",
+            opacity=0.95,
             smooth_shading=True,
-            specular=0.75,
+            specular=0.65,
             specular_power=35,
-            ambient=0.28,
+            ambient=0.25,
         )
 
         # 3. Delicate Internal Inboard Damper / Bellcrank / Powertrain CAD Schematic Lines
@@ -147,29 +147,29 @@ class F1XRayCarRenderer:
         inboard_mesh = _merge_meshes(inboard_parts)
         self.actor_inboard = self.plotter.add_mesh(
             inboard_mesh,
-            color="#C88A4B",
-            opacity=0.82,
+            color="#B85D19",
+            opacity=0.88,
             smooth_shading=True,
             specular=0.60,
             ambient=0.35,
         )
 
-        # Center of Gravity / Aero Center white sphere marker inside chassis
+        # Center of Gravity / Aero Center sphere marker inside chassis
         cg_sphere = pv.Sphere(radius=0.044, center=(-0.05, 0.0, 0.25))
         self.actor_cg = self.plotter.add_mesh(
             cg_sphere,
-            color="#EAECEF",
+            color="#D92632",
             opacity=0.92,
             smooth_shading=True,
-            ambient=0.60,
+            ambient=0.50,
         )
 
-        # 4. 4 Segmented Real CAD Wheel & Tire Assemblies (FL, FR, RL, RR)
+        # 4. 4 Perfectly Round Revolved 18-Inch F1 Wheel & Tire Assemblies (FL, FR, RL, RR)
         self.wheel_centers = {
-            "FL": (1.135,  0.546, 0.284),
-            "FR": (1.135, -0.546, 0.284),
-            "RL": (-1.570,  0.538, 0.266),
-            "RR": (-1.570, -0.538, 0.266),
+            "FL": (1.1353,  0.545, 0.266),
+            "FR": (1.1353, -0.545, 0.266),
+            "RL": (-1.5696,  0.540, 0.266),
+            "RR": (-1.5696, -0.540, 0.266),
         }
         self.wheel_actors = {}
         for corner in ("FL", "FR", "RL", "RR"):
@@ -177,15 +177,15 @@ class F1XRayCarRenderer:
             w_mesh = pv.read(w_path)
             self.wheel_actors[corner] = self.plotter.add_mesh(
                 w_mesh,
-                color="#1C1E23",
-                opacity=0.95,
+                color="#1E2128",
+                opacity=0.92,
                 smooth_shading=True,
-                specular=0.38,
-                specular_power=22,
-                ambient=0.18,
+                specular=0.35,
+                specular_power=24,
+                ambient=0.22,
             )
 
-        # 5. 6 White 3D Force Vectors (#FFFFFF)
+        # 5. 6 Dynamic 3D Force Vectors (#14161A high-contrast dark charcoal on beige)
         unit_arrow_up = pv.Arrow(
             start=(0.0, 0.0, 0.0),
             direction=(0.0, 0.0, 1.0),
@@ -215,25 +215,25 @@ class F1XRayCarRenderer:
         for corner in ("FL", "FR", "RL", "RR"):
             self.arrow_tire_actors[corner] = self.plotter.add_mesh(
                 unit_arrow_up.copy(),
-                color="#FFFFFF",
-                opacity=1.0,
+                color="#D92632",
+                opacity=0.95,
                 smooth_shading=True,
-                ambient=0.90,
+                ambient=0.55,
             )
 
         self.actor_arrow_downforce = self.plotter.add_mesh(
             unit_arrow_down.copy(),
-            color="#FFFFFF",
-            opacity=1.0,
+            color="#1E6AD4",
+            opacity=0.95,
             smooth_shading=True,
-            ambient=0.90,
+            ambient=0.55,
         )
         self.actor_arrow_drag = self.plotter.add_mesh(
             unit_arrow_drag.copy(),
-            color="#FFFFFF",
-            opacity=1.0,
+            color="#1E6AD4",
+            opacity=0.95,
             smooth_shading=True,
-            ambient=0.90,
+            ambient=0.55,
         )
 
     def render_frame(self, sample: Dict[str, Any]) -> Image.Image:
@@ -315,7 +315,7 @@ class F1XRayCarRenderer:
 
         self.plotter.render()
         rgb_arr = self.plotter.screenshot(transparent_background=False, return_img=True)
-        diff = np.max(np.abs(rgb_arr.astype(np.int16) - np.array([8, 8, 10], dtype=np.int16)), axis=-1)
+        diff = np.max(np.abs(rgb_arr.astype(np.int16) - np.array([243, 239, 230], dtype=np.int16)), axis=-1)
         alpha = np.clip(diff * 18, 0, 255).astype(np.uint8)
         rgba_arr = np.dstack([rgb_arr, alpha])
         return Image.fromarray(rgba_arr, mode="RGBA")
@@ -330,7 +330,7 @@ if __name__ == "__main__":
     sample = tel.sample_at_time(20.5)
     renderer = F1XRayCarRenderer()
     img = renderer.render_frame(sample)
-    bg = Image.new("RGBA", img.size, (8, 8, 10, 255))
+    bg = Image.new("RGBA", img.size, (243, 239, 230, 255))
     bg.alpha_composite(img)
     bg.save("test_car_3d.png")
     renderer.close()

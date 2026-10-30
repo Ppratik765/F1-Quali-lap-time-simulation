@@ -359,48 +359,39 @@ def simulate_brazil_2026_lap(
     t_s3_target = float(ev["target_sectors_s"]["S3"])
 
     v_ms = v_raw.copy()
+    clip_start = int(pu.get("depletion_clip_start_m", 4040))
     # Cap infield short-chute speeds to realistic 2026 acceleration limits (6th gear max between T5-T6, 5th gear T10-T12)
     infield_cap_kmh = np.full_like(s, float(veh["max_speed_kmh"]))
-    # Smooth asymptotic drag limit on Reta Oposta peaking at 318 km/h right at s=1150m (no flat-topping)
-    for idx_r in range(600, 1151):
-        frac_r = (idx_r - 600) / 550.0
-        infield_cap_kmh[idx_r] = 274.0 + 44.0 * (1.0 - np.exp(-2.8 * frac_r)) / (1.0 - np.exp(-2.8))
+    # Smooth asymptotic FIA-tapered acceleration on Reta Oposta peaking at 321.5 km/h right before T4 braking (s=1310m)
+    for idx_r in range(600, 1311):
+        frac_r = (idx_r - 600) / 710.0
+        infield_cap_kmh[idx_r] = 272.0 + 49.5 * (1.0 - np.exp(-2.6 * frac_r)) / (1.0 - np.exp(-2.6))
     infield_cap_kmh[(s >= 1520) & (s <= 1980)] = 264.0  # Chute to Ferradura (6th gear)
     infield_cap_kmh[(s >= 1980) & (s <= 2820)] = 216.0  # Ferradura -> Laranjinha -> Pinheirinho -> Bico de Pato (2nd-5th gear)
     infield_cap_kmh[(s >= 2820) & (s <= 3240)] = 246.0  # Mergulho dive to Junção (5th-6th gear)
-    # Main straight uphill asymptotic climb peaking at 312 km/h at s=4085m
-    for idx_m in range(3450, 4086):
-        frac_m = (idx_m - 3450) / 635.0
-        infield_cap_kmh[idx_m] = 248.0 + 64.0 * (1.0 - np.exp(-2.5 * frac_m)) / (1.0 - np.exp(-2.5))
+    # Main straight uphill asymptotic climb peaking at 316 km/h at s=4040m before battery hits 0.00 MJ
+    for idx_m in range(3450, clip_start + 1):
+        frac_m = (idx_m - 3450) / max(1.0, float(clip_start - 3450))
+        infield_cap_kmh[idx_m] = 248.0 + 68.0 * (1.0 - np.exp(-2.4 * frac_m)) / (1.0 - np.exp(-2.4))
     infield_cap_ms = gaussian_filter1d(infield_cap_kmh / 3.6, sigma=14.0, mode="nearest")
 
-    def _apply_envelope_and_superclip(v_arr: np.ndarray) -> np.ndarray:
+    def _apply_envelope_and_clipping(v_arr: np.ndarray) -> np.ndarray:
         v_out = np.minimum(v_arr, infield_cap_ms)
-        # Apply realistic speed drop (clipping) across the two low-SOC Superclip zones (-250 kW drag at 100% throttle)
-        for sc in pu["superclip_zones_m"]:
-            sc_start, sc_end = int(sc["start_m"]), int(sc["end_m"])
-            v_entry = v_out[sc_start]
-            for idx_sc in range(sc_start, min(n, sc_end + 1)):
-                frac = (idx_sc - sc_start) / max(1.0, float(sc_end - sc_start))
-                # Speed visibly decelerates (clips) by ~20 km/h (5.55 m/s) across the 1.8s superclip zone
-                v_out[idx_sc] = min(v_out[idx_sc], v_entry - 5.55 * (frac ** 0.90))
-        # Smooth transition from second superclip zone (s=4255) back to v0_ms (301 km/h) at finish line (s=4309)
-        v_sc2_end = v_out[4255]
-        for idx_end in range(4255, n):
-            frac_end = (idx_end - 4255) / max(1.0, float(n - 1 - 4255))
-            v_out[idx_end] = v_sc2_end + (v0_ms - v_sc2_end) * frac_end
+        # End-of-lap General Depletion Clipping (s=4040..4309m) where SOC=0.00 MJ and MGU-K cuts to 0 kW (OFF):
+        # Car decelerates (clips) on the uphill climb from 316 km/h down to v0 (304 km/h) at the finish line
+        v_clip_entry = v_out[clip_start]
+        for idx_c in range(clip_start, n):
+            frac_c = (idx_c - clip_start) / max(1.0, float(n - 1 - clip_start))
+            v_target_c = v_clip_entry + (v0_ms - v_clip_entry) * (frac_c ** 0.88)
+            v_out[idx_c] = min(v_out[idx_c], v_target_c)
         v_out = gaussian_filter1d(v_out, sigma=3.5, mode="nearest")
         v_out[0] = v0_ms
         return v_out
 
-    v_ms = _apply_envelope_and_superclip(v_ms)
+    v_ms = _apply_envelope_and_clipping(v_ms)
 
     # Calibrate cornering/mid-speed pace so sector times match exact 2026 targets (S1: 18.285s, S2: 35.915s, S3: 16.640s -> 1:10.840)
-    # while preserving the exact straight-line asymptotic curve and superclip deceleration slope
-    sc_preserve = np.zeros_like(s, dtype=bool)
-    for sc in pu["superclip_zones_m"]:
-        sc_preserve |= (s >= sc["start_m"] - 80) & (s <= sc["end_m"] + 25)
-    sc_preserve |= (s >= 4250)
+    sc_preserve = (s >= 850) & (s <= 1315) | (s >= clip_start - 80)
 
     for _ in range(12):
         dt_step = 1.0 / (0.5 * (v_ms[:-1] + v_ms[1:]))
@@ -411,13 +402,12 @@ def simulate_brazil_2026_lap(
         s_prof[:s1_end] = (t_s1_raw / t_s1_target) ** 1.35
         s_prof[s1_end:s2_end] = (t_s2_raw / t_s2_target) ** 1.35
         s_prof[s2_end:] = (t_s3_raw / t_s3_target) ** 1.35
-        # Weight scaling toward corners/acceleration zones so straight-line peaks & superclip drops stay untouched
         w_mod = np.where(sc_preserve, 0.0, np.clip((305.0 / 3.6 - v_ms) / (45.0 / 3.6), 0.15, 1.0))
         pin_window = 1.0 - np.exp(-s / 15.0)
         s_prof = 1.0 + (s_prof - 1.0) * w_mod * pin_window
-        v_ms = _apply_envelope_and_superclip(v_ms * s_prof)
+        v_ms = _apply_envelope_and_clipping(v_ms * s_prof)
 
-    # Final exact微-adjustment on non-superclip zones so sector splits are millisecond-exact
+    # Final exact micro-adjustment so sector splits are millisecond-exact
     for _ in range(6):
         dt_step = 1.0 / (0.5 * (v_ms[:-1] + v_ms[1:]))
         t_s1_raw = float(np.sum(dt_step[:s1_end]))
@@ -448,8 +438,8 @@ def simulate_brazil_2026_lap(
     brake_pct = np.zeros_like(s)
 
     for i in range(n):
-        if long_g[i] < -0.32 and not ((1140.0 <= s[i] <= 1308.0) or (4075.0 <= s[i] <= 4265.0)):
-            # Braking zone (excluding 100%-throttle Superclip deceleration zones)
+        if long_g[i] < -0.32 and not (s[i] >= clip_start - 15):
+            # Braking zone (excluding 100%-throttle end-of-lap depletion clipping zone)
             brake_pct[i] = np.clip((-long_g[i] - 0.15) / 4.0 * 100.0, 8.0, 100.0)
             throttle_pct[i] = 0.0
         elif np.abs(lat_g[i]) > 1.25 and long_g[i] < 0.72 and ((275.0 <= s[i] <= 375.0) or (1365.0 <= s[i] <= 3320.0)):
@@ -461,19 +451,13 @@ def simulate_brazil_2026_lap(
             throttle_pct[i] = 100.0
             brake_pct[i] = 0.0
 
-    # Ensure explicit 100% throttle throughout Superclip zones
-    for sc in pu["superclip_zones_m"]:
-        mask_sc = (s >= sc["start_m"]) & (s <= sc["end_m"])
-        throttle_pct[mask_sc] = 100.0
-        brake_pct[mask_sc] = 0.0
+    throttle_pct[s >= clip_start] = 100.0
+    brake_pct[s >= clip_start] = 0.0
 
     throttle_pct = np.clip(gaussian_filter1d(throttle_pct, sigma=2.0, mode="nearest"), 0.0, 100.0)
     brake_pct = np.clip(gaussian_filter1d(brake_pct, sigma=2.0, mode="nearest"), 0.0, 100.0)
-    # Re-pin 100% throttle in superclip zones and start/finish
-    for sc in pu["superclip_zones_m"]:
-        mask_sc = (s >= sc["start_m"]) & (s <= sc["end_m"])
-        throttle_pct[mask_sc] = 100.0
-        brake_pct[mask_sc] = 0.0
+    throttle_pct[s >= clip_start] = 100.0
+    brake_pct[s >= clip_start] = 0.0
     throttle_pct[throttle_pct > 95.0] = 100.0
     throttle_pct[brake_pct > 5.0] = 0.0
     brake_pct[throttle_pct > 5.0] = 0.0
@@ -528,7 +512,7 @@ def simulate_brazil_2026_lap(
     aero_balance_pct = bal_z + (bal_x - bal_z) * x_mode_fraction - 0.15 * long_g
     aero_balance_pct = np.clip(aero_balance_pct, 41.0, 46.2)
 
-    # 2026 Power Unit & Explicit Superclipping State Machine
+    # 2026 Power Unit & Realistic Qualifying Energy / Clipping State Machine (Zero Superclipping)
     ice_max_kw = float(pu["ice_max_power_kw"])
     ice_power_kw = ice_max_kw * np.power(throttle_pct / 100.0, 1.15)
     ice_power_kw[throttle_pct < 2.0] = 0.0
@@ -540,62 +524,54 @@ def simulate_brazil_2026_lap(
     taper_slope = float(pu["mguk_taper_slope_kw_per_kmh"])
     mguk_max_kw = float(pu["mguk_max_deploy_kw"])
 
-    superclip_mask = np.zeros_like(s, dtype=bool)
-    for sc in pu["superclip_zones_m"]:
-        superclip_mask |= (s >= sc["start_m"]) & (s <= sc["end_m"])
-
     for i in range(n):
         th = throttle_pct[i]
         br = brake_pct[i]
         vk = speed_kmh[i]
 
-        if superclip_mask[i] and th >= 98.0:
-            mguk_power_kw[i] = float(pu["mguk_superclip_kw"])  # -250 kW at 100% throttle
-            mguk_state[i] = "SUPERCLIP"
+        if s[i] >= clip_start:
+            # General battery depletion clipping (SOC = 0.00 MJ): MGU-K cuts to 0 kW (OFF) while ICE stays at 400 kW
+            mguk_power_kw[i] = 0.0
+            mguk_state[i] = "OFF"
         elif br > 5.0 or th < 5.0:
             # Overrun harvesting under braking
             harvest_scale = np.clip(br / 65.0, 0.25, 1.0) * np.clip(vk / 130.0, 0.3, 1.0)
             mguk_power_kw[i] = float(pu["mguk_max_harvest_overrun_kw"]) * harvest_scale
             mguk_state[i] = "HARVEST"
         elif 10.0 <= th <= 65.0:
-            # Part-throttle harvesting in technical corners (-50 to -260 kW)
+            # Part-throttle harvesting in technical corners (-50 to -240 kW)
             pt_frac = (65.0 - th) / 55.0
-            mguk_power_kw[i] = -50.0 - 210.0 * np.clip(pt_frac, 0.0, 1.0)
+            mguk_power_kw[i] = -50.0 - 190.0 * np.clip(pt_frac, 0.0, 1.0)
             mguk_state[i] = "HARVEST"
         else:
-            # Deployment on full throttle
+            # Full-throttle deployment with 2026 FIA regulatory taper above 290 km/h: P = 350 - 6.36*(v - 290)
             if vk <= taper_start:
                 p_dep = mguk_max_kw
             else:
-                # Linear taper above 290 km/h; keep >= 95 kW on high-speed climb unless superclipping
-                p_dep = max(95.0, mguk_max_kw - taper_slope * (vk - taper_start))
+                p_dep = max(0.0, mguk_max_kw - taper_slope * (vk - taper_start))
             mguk_power_kw[i] = p_dep
             mguk_state[i] = "DEPLOY" if abs(p_dep) >= 5.0 else "OFF"
 
     # Smooth MGU-K trace slightly while keeping state transitions crisp
     mguk_power_kw = gaussian_filter1d(mguk_power_kw, sigma=2.0, mode="nearest")
-    mguk_power_kw[superclip_mask] = float(pu["mguk_superclip_kw"])
+    mguk_power_kw[s >= clip_start] = 0.0
 
     for i in range(n):
-        if superclip_mask[i]:
-            mguk_state[i] = "SUPERCLIP"
-        elif abs(mguk_power_kw[i]) < 5.0:
+        if s[i] >= clip_start or abs(mguk_power_kw[i]) < 5.0:
             mguk_state[i] = "OFF"
         elif mguk_power_kw[i] > 0:
             mguk_state[i] = "DEPLOY"
         else:
             mguk_state[i] = "HARVEST"
 
-    # Integrate Energy Recovered bars (Overrun, Part throttle, Superclip) [MJ]
+    # Integrate Energy Recovered bars (Overrun, Part throttle, Superclip = 0.00 MJ) [MJ]
     dt_arr = np.gradient(t)
     e_overrun_step = np.zeros_like(s)
     e_part_step = np.zeros_like(s)
     e_superclip_step = np.zeros_like(s)
 
     for i in range(n):
-        if mguk_state[i] == "SUPERCLIP":
-            e_superclip_step[i] = (-mguk_power_kw[i] / 1000.0) * dt_arr[i]
-        elif mguk_state[i] == "HARVEST":
+        if mguk_state[i] == "HARVEST":
             if brake_pct[i] > 2.0 or throttle_pct[i] < 10.0:
                 e_overrun_step[i] = (-mguk_power_kw[i] / 1000.0) * dt_arr[i]
             else:
@@ -603,16 +579,10 @@ def simulate_brazil_2026_lap(
 
     energy_overrun_mj = np.cumsum(e_overrun_step)
     energy_part_throttle_mj = np.cumsum(e_part_step)
-    energy_superclip_mj = np.cumsum(e_superclip_step)
-
-    # Calibrate Superclip cumulative recovery to reach ~0.65 MJ by lap end
-    target_sc_mj = float(pu.get("target_superclip_total_mj", 0.65))
-    if energy_superclip_mj[-1] > 1e-4:
-        energy_superclip_mj = energy_superclip_mj * (target_sc_mj / energy_superclip_mj[-1])
-
+    energy_superclip_mj = np.zeros_like(s)  # Zero superclipping at Brazil qualifying
     energy_total_recovered_mj = energy_overrun_mj + energy_part_throttle_mj + energy_superclip_mj
 
-    # Battery SOC [MJ] starting at SOC_0 = 2.95 MJ with physical depletion into low-SOC Superclip zones
+    # Battery SOC [MJ] starting at SOC_0 = 3.65 MJ and depleting to 0.00 MJ at s = 4040 m (general clipping)
     soc_0 = float(pu["soc_initial_mj"])
     soc_min = float(pu["soc_min_mj"])
     soc_max = float(pu["soc_max_mj"])
@@ -621,19 +591,13 @@ def simulate_brazil_2026_lap(
     for i in range(1, n):
         p_k = mguk_power_kw[i]
         if p_k >= 0.0:
-            # Smooth depletion to ~0.57 MJ at s=1150m (Reta Oposta end) and ~0.58 MJ at s=4085m (Main Straight top)
-            eff_draw = 0.72 if s[i] < 1155 else 0.40
+            eff_draw = 0.56 if s[i] < 1320 else (0.48 if s[i] < 3260 else 0.355)
             dsoc = -(p_k / 1000.0) * dt_arr[i] * eff_draw
         else:
-            # Harvesting under braking / part-throttle / superclipping recharges ES
-            if s[i] < 400:
-                eff_rec = 0.42
-            elif 1305 <= s[i] <= 3250:
-                eff_rec = 0.96
-            else:
-                eff_rec = 0.85
+            eff_rec = 0.35 if s[i] < 400 else 0.72
             dsoc = -(p_k / 1000.0) * dt_arr[i] * eff_rec
         soc_mj[i] = np.clip(soc_mj[i - 1] + dsoc, soc_min, soc_max)
+    soc_mj[s >= clip_start] = 0.0
 
     # Fuel Used [kg] integrated from 3000 MJ/h limit (~0.925 kg over the lap)
     target_fuel_kg = float(pu["target_lap_fuel_kg"])
