@@ -1,7 +1,7 @@
 """
 physics_2026.py — 2026 FIA Quasi-Steady-State (QSS) forward-backward velocity solver,
 3D elevation gravity component, Active Aero (Z-Mode vs X-Mode), MGU-K state machine
-(DEPLOY, HARVEST, SUPERCLIP, OFF), 4-corner tire & suspension kinematics, and
+(DEPLOY, HARVEST, SUPERCLIP, IDLE), 4-corner tire & suspension kinematics, and
 5-parameter Lap Time Sensitivity perturbation calculator.
 """
 
@@ -45,7 +45,7 @@ class TelemetryResult:
     # 2026 Power Unit & Energy Management
     ice_power_kw: np.ndarray
     mguk_power_kw: np.ndarray
-    mguk_state: np.ndarray        # 'DEPLOY', 'HARVEST', 'SUPERCLIP', 'OFF'
+    mguk_state: np.ndarray        # 'DEPLOY', 'HARVEST', 'SUPERCLIP', 'IDLE'
     soc_mj: np.ndarray
     fuel_used_kg: np.ndarray
     energy_overrun_mj: np.ndarray
@@ -191,12 +191,67 @@ def _lap_time(s: np.ndarray, v: np.ndarray) -> float:
     return float(np.sum(np.diff(s) / (0.5 * (v[:-1] + v[1:]))))
 
 
+LAST_ANCHOR: Dict[str, float] = {}
+
+
+def sessions_ratio(config_path: str):
+    """Mean (and spread) of real 2026 qualifying lap / 2025 pole at the circuits in data/sessions_2026.json."""
+    path = os.path.join(os.path.dirname(os.path.abspath(config_path)), "data", "sessions_2026.json")
+    with open(path, "r", encoding="utf-8") as f:
+        d = json.load(f)
+    r = [v["lap_2026_s"] / v["pole_2025_s"] for v in d.values() if "lap_2026_s" in v and "pole_2025_s" in v]
+    return float(np.mean(r)), float(np.std(r, ddof=1)) if len(r) > 1 else 0.0, len(r)
+
+
+def _plan_lap_time(s: np.ndarray, plan) -> float:
+    v = gaussian_filter1d(np.array(plan.info.v), 2.0, mode="wrap")
+    v[-1] = v[0]
+    return float(np.sum(np.diff(s) / (0.5 * (v[:-1] + v[1:]))))
+
+
+def anchor_params(cfg: dict, s, kappa, sin_theta, params: Dict[str, float], target_s: float, n_iter: int = 15):
+    """
+    Finds one factor f applied to BOTH grip and power so that the energy-optimal lap equals target_s.
+    This is a catch-all 'the 2026 car loses more here than the 3-circuit physics fit says' correction.
+    """
+    xmask = Q.prepare_xmode(s, kappa, sin_theta, cfg, params)
+    warm = {"p": None}
+
+    def lap(f: float):
+        p = dict(params)
+        p["grip_scale"] = p.get("grip_scale", 1.0) * f
+        p["power_scale"] = p.get("power_scale", 1.0) * f
+        _, plan, _ = Q.predict_lap(s, kappa, sin_theta, cfg, p, xmask=xmask, n_iter=n_iter, warm_p=warm["p"],
+                                   trust0_kw=120.0 if warm["p"] is not None else 350.0)
+        warm["p"] = plan.p_kw.copy()
+        return _plan_lap_time(s, plan), p, plan.p_kw.copy()
+
+    f0 = 1.0
+    t0, p0, pk0 = lap(f0)
+    t_unanchored = t0
+    f1 = float(np.clip(1.0 - (target_s - t0) / 28.0, 0.7, 1.15))     # ~0.28 s per 1 % of grip+power
+    t1, p1, pk1 = lap(f1)
+    best = (abs(t1 - target_s), f1, t1, p1, pk1)
+    for _ in range(4):
+        if abs(t1 - target_s) < 0.02 or abs(t1 - t0) < 1e-6:
+            break
+        f2 = float(np.clip(f1 + (target_s - t1) * (f1 - f0) / (t1 - t0), 0.7, 1.15))
+        f0, t0 = f1, t1
+        f1 = f2
+        t1, p1, pk1 = lap(f1)
+        if abs(t1 - target_s) < best[0]:
+            best = (abs(t1 - target_s), f1, t1, p1, pk1)
+    _, f, t, p, pk = best
+    return p, {"factor": f, "lap_unanchored_s": t_unanchored, "lap_anchored_s": t, "target_s": target_s}, pk
+
+
 def simulate_brazil_2026_lap(
     config_path: str = "config_brazil_2026.json",
     track: TrackData = None,
     params: Optional[Dict[str, float]] = None,
     n_iter: int = 30,
     with_sensitivities: bool = True,
+    anchor: bool = True,
 ) -> TelemetryResult:
     """
     Predictive 2026 qualifying lap. Lap time, speed, throttle, brake, MGU-K power and SOC are all outputs of
@@ -214,7 +269,19 @@ def simulate_brazil_2026_lap(
     g = 9.81
     veh, pu, aero, susp, ev = cfg["vehicle_2026"], cfg["power_unit_2026"], cfg["aerodynamics_2026"], cfg["suspension_and_tires"], cfg["event"]
 
-    model, plan, xmask = Q.predict_lap(s, kappa, sin_theta, cfg, params, n_iter=n_iter)
+    LAST_ANCHOR.clear()
+    warm_plan = None
+    ref_2025 = ev.get("reference_2025_pole_s")
+    if anchor and ref_2025 and ev.get("anchor_to_2025_ratio", False):
+        ratio, ratio_sd, n_ref = sessions_ratio(config_path)
+        target = float(ref_2025) * ratio
+        params, info, warm_plan = anchor_params(cfg, s, kappa, sin_theta, params, target)
+        info.update(ratio=ratio, ratio_sd=ratio_sd, n_circuits=n_ref, reference_2025_pole_s=float(ref_2025))
+        LAST_ANCHOR.update(info)
+        print(f"[Anchor] physics-only lap {info['lap_unanchored_s']:.3f}s -> anchored to {target:.3f}s "
+              f"(2025 pole {ref_2025} x {ratio:.4f}); grip & power x{info['factor']:.4f}")
+    model, plan, xmask = Q.predict_lap(s, kappa, sin_theta, cfg, params, n_iter=n_iter, warm_p=warm_plan,
+                                       trust0_kw=120.0 if warm_plan is not None else 350.0)
     v_ms = gaussian_filter1d(np.array(plan.info.v), 2.0, mode="wrap")
     v_ms[-1] = v_ms[0]
     ds_steps = np.diff(s)
@@ -320,7 +387,7 @@ def simulate_brazil_2026_lap(
         elif p < -5.0:
             mguk_state[i] = "SUPERCLIP" if (plim[i] and not braking_node[i] and throttle_pct[i] >= 95.0) else "HARVEST"
         else:
-            mguk_state[i] = "OFF"
+            mguk_state[i] = "IDLE"
 
     rec_step = np.where(mguk_power_kw < 0, -mguk_power_kw * dt_arr * eta_harvest / 1000.0, 0.0)
     is_sc = mguk_state == "SUPERCLIP"

@@ -593,6 +593,7 @@ class BroadcastHUDRenderer:
             "DEPLOY":    "#1E6AD4",
             "HARVEST":   "#B82525",
             "SUPERCLIP": "#D68910",
+            "IDLE":      "#444852",
             "OFF":       "#444852",
         }
         b_col = badge_colors.get(st_curr, "#444852")

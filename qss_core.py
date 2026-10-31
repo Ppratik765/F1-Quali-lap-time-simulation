@@ -469,6 +469,10 @@ def optimise_energy(
     rech_max = float(pu.get("max_recharge_per_lap_mj", 7.0))
     sc_max = pu.get("superclip_max_mj_per_lap")            # energy that may be harvested at full throttle per lap
     sc_max = None if sc_max is None else float(sc_max)
+    mdf = float(pu.get("mguk_min_deploy_fraction", 0.0))   # phase 2: idle full-throttle blocks must deploy >= this fraction
+    forced = None
+    forced_nodes = None             # nodes (power-limited, not braking) where phase 2 enforces the minimum deploy
+    phase = 0
     margin = 0.02
 
     nb = int(math.ceil((n - 1) / block_m))
@@ -482,9 +486,15 @@ def optimise_energy(
         # until the speed profile and the energy-limited power agree (clamping only ever removes power).
         p_cur = np.array(p_vec, dtype=np.float64)
         consistent = False
-        for _ in range(6):
+        for _ in range(8):
             info = model.solve(list(p_cur))
             harv, dep, brk = model.node_capacities(info)
+            if forced_nodes is not None:
+                floor_p = np.where(forced_nodes, mdf * np.array(dep), -1e9)     # only forced nodes get a floor
+                p_floor = np.maximum(p_cur, floor_p)
+                if float(np.max(np.abs(p_floor - p_cur))) > 0.5:
+                    p_cur = p_floor
+                    continue
             sc_mask = [bool(a) and not b for a, b in zip(list(info.plim) + [info.plim[-1]], brk)]
             soc, rech, dep_e, p_eff = soc_trace(model, list(p_cur), info.dt + [info.dt[-1]], harv, soc0, soc_max, soc_min,
                                                 eta_d, eta_h, rech_max, sc_mask, sc_max)
@@ -511,7 +521,9 @@ def optimise_energy(
     trust = trust0_kw
     small_gain = 0
 
-    for it in range(n_iter):
+    converged = False
+    phase_it = 0
+    for it in range(n_iter * (2 if mdf > 0.0 else 1)):
         g = np.array(model.gradient(info, list(p_node)) + [0.0])
         dts = np.array(info.dt + [info.dt[-1]])
         G_j = block_sum(g)                                  # s per kW of block-wide power
@@ -534,6 +546,11 @@ def optimise_energy(
         tr_A = [np.hstack([I, -I]), np.hstack([-I, I])]
         tr_b = [p0_j + trust, -(p0_j - trust)]
         bounds = [(0.0, float(max(0.0, d))) for d in dbound] + [(0.0, float(max(0.0, h))) for h in hbound]
+        if forced is not None:
+            for j in np.where(forced)[0]:
+                dj = float(max(0.0, dbound[j]))
+                bounds[j] = (mdf * dj, dj)
+                bounds[J + j] = (0.0, 0.0)
         rech_row = np.concatenate([np.zeros(J), dt_j * eta_h / 1000.0])[None, :]
         extra_A, extra_b = [], []
         if sc_max is not None:
@@ -574,7 +591,7 @@ def optimise_energy(
             if gain < 2e-4:
                 small_gain += 1
                 if small_gain >= 3:
-                    break
+                    converged = True
             else:
                 small_gain = 0
         else:
@@ -582,6 +599,32 @@ def optimise_energy(
                 print(f"   iter {it:2d}: rejected (LP status {res.status}, pred. step {np.abs(p_new_j - p0_j).max():.0f} kW, last trial T={inf2.t:.4f} vs {best_t:.4f}, feasible={feas2}) trust={trust:.0f}")
             trust *= 0.5
             if trust < 3.0:
+                converged = True
+
+        phase_it += 1
+        if phase == 0 and mdf > 0.0 and phase_it >= n_iter:
+            converged = True                       # phase 1 used its whole budget: move on to phase 2
+        if converged:
+            if phase == 0 and mdf > 0.0:
+                # Phase 2: an MGU-K that sits at exactly zero torque on a power-limited straight while charge remains is
+                # not something a real energy controller does. Force a minimum deployment there and re-optimise.
+                phase = 1
+                sc_like = np.array([(1.0 if (pl and not bk) else 0.0)
+                                    for pl, bk in zip(list(info.plim) + [info.plim[-1]], brk)])
+                idle = (np.abs(p_node) < 6.0) & (sc_like > 0) & (np.array(dep) > 50.0) & (np.array(soc) > soc_min + 0.05)
+                forced = block_mean(idle.astype(float)) >= 0.15
+                forced_nodes = forced[blk] & (sc_like > 0)
+                p_proj = p_node.copy()
+                info, harv, dep, brk, soc, rech, dep_e, p_node, _ = evaluate(p_proj)
+                best_t = info.t
+                history.append(best_t)
+                trust = trust0_kw
+                small_gain = 0
+                converged = False
+                phase_it = 0
+                if verbose:
+                    print(f"   phase 2: {int(forced.sum())} idle blocks forced to >= {mdf:.0%} deploy, T={best_t:.4f}")
+            else:
                 break
 
     return EnergyPlan(p_kw=np.array(p_node), info=info, soc=np.array(soc), recharge_mj=rech, deploy_elec_mj=dep_e, history=history)

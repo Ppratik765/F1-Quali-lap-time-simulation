@@ -24,6 +24,8 @@ import matplotlib.pyplot as plt
 
 import calibrate as C
 import qss_core as Q
+import physics_2026 as _P26
+P_LAST_ANCHOR = lambda: _P26.LAST_ANCHOR
 from physics_2026 import simulate_brazil_2026_lap, TelemetryResult
 from track_loader import load_interlagos_track, TrackData
 
@@ -182,16 +184,36 @@ def main():
     cfg_hot["event"]["weather"]["ambient_temperature_c"] += 8.0
     _, plan_h, _ = Q.predict_lap(s, kappa, sin_theta, cfg_hot, params, xmask=xmask, n_iter=20)
     v_h = gaussian_filter1d(np.array(plan_h.info.v), 2.0, mode="wrap")
-    d_weather = C.lap_time_from_v(s, v_h) - res.lap_time_s
+    d_weather = C.lap_time_from_v(s, v_h) - (P_LAST_ANCHOR().get('lap_unanchored_s', res.lap_time_s))
     spread = (max(fold_times) - min(fold_times)) / 2.0 if fold_times else 0.0
     sigma = float(np.sqrt(loo_rms ** 2 + (spread / 2.0) ** 2 + (d_weather / 2.0) ** 2))
     t_pred = res.lap_time_s
+    anchor = dict(P_LAST_ANCHOR()) if callable(P_LAST_ANCHOR) else {}
+    # ratio method: leave-one-out error of "2025 pole x mean(2026/2025 ratio of the other circuits)"
+    ratio_rows = []
+    with open(os.path.join(os.path.dirname(os.path.abspath(CONFIG)), "data", "sessions_2026.json"), "r", encoding="utf-8") as f:
+        sj = json.load(f)
+    for k, d in sj.items():
+        if "pole_2025_s" in d and "lap_2026_s" in d:
+            others = [o["lap_2026_s"] / o["pole_2025_s"] for kk, o in sj.items() if kk != k and "pole_2025_s" in o]
+            ratio_rows.append((k, d["pole_2025_s"] * float(np.mean(others)) - d["lap_2026_s"]))
+    ratio_rms = float(np.sqrt(np.mean([e * e for _, e in ratio_rows]))) if ratio_rows else float("nan")
+    if anchor:
+        print(f"Physics-only lap (3-circuit fit, no anchor): {fmt_time(anchor['lap_unanchored_s'])}  "
+              f"(held-out RMS {loo_rms:.2f} s)")
+        print("2025-ratio method, leave-one-circuit-out: " + ", ".join(f"{k} {e:+.2f} s" for k, e in ratio_rows)
+              + f"   RMS {ratio_rms:.2f} s  (only {len(ratio_rows)} circuits)")
+        print(f"Anchor: 2025 pole {fmt_time(anchor['reference_2025_pole_s'])} x {anchor['ratio']:.4f} = {fmt_time(anchor['target_s'])}; "
+              f"grip & power scaled x{anchor['factor']:.4f} so the energy-optimal lap hits it")
+        sigma = float(np.sqrt(ratio_rms ** 2 + (d_weather / 2.0) ** 2))
+    else:
+        sigma = float(np.sqrt(loo_rms ** 2 + (spread / 2.0) ** 2 + (d_weather / 2.0) ** 2))
     print(f"Predicted pole-lap time : {fmt_time(t_pred)}  ({t_pred:.3f} s)")
     print(f"  Sector 1 / 2 / 3      : {res.sector_times_s[0]:.3f} / {res.sector_times_s[1]:.3f} / {res.sector_times_s[2]:.3f} s")
-    print(f"Unseen-circuit (LOO) error: mean {loo_bias:+.3f} s, RMS {loo_rms:.3f} s")
-    if fold_times:
+    if fold_times and not anchor:
+        print(f"Unseen-circuit (LOO) error: mean {loo_bias:+.3f} s, RMS {loo_rms:.3f} s")
         print(f"Spread across cross-validation parameter sets: {fmt_time(min(fold_times))} - {fmt_time(max(fold_times))}")
-    print(f"+8 C ambient: {d_weather:+.3f} s")
+    print(f"+8 C ambient (physics-only): {d_weather:+.3f} s")
     print(f"1-sigma uncertainty     : +/- {sigma:.3f} s   ->  68% window {fmt_time(t_pred - sigma)} to {fmt_time(t_pred + sigma)}")
     print(f"                          ~95% window {fmt_time(t_pred - 2*sigma)} to {fmt_time(t_pred + 2*sigma)}")
     print("Caveat: ideal-lap model; real qualifying also depends on track evolution, tyre prep, traffic and driver error.")
