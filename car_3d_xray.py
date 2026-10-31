@@ -2,7 +2,7 @@
 car_3d_xray.py — Off-screen PyVista 3D translucent X-Ray F1 car renderer using
 the segmented 235k-triangle Formula 1 CAD mesh assembly (assets/f1_*.vtp) with
 articulated chassis pitch, roll, vertical heave (ride height), steering front wheels,
-internal carbon/titanium suspension wishbones & rockers, and 6 dynamic white 3D force arrows.
+internal carbon/titanium suspension wishbones & rockers, and 6 dynamic red 3D force arrows.
 """
 
 import os
@@ -215,7 +215,7 @@ class F1XRayCarRenderer:
         for corner in ("FL", "FR", "RL", "RR"):
             self.arrow_tire_actors[corner] = self.plotter.add_mesh(
                 unit_arrow_up.copy(),
-                color="#14161A",
+                color="#D92632",
                 opacity=1.0,
                 smooth_shading=True,
                 ambient=0.65,
@@ -223,14 +223,14 @@ class F1XRayCarRenderer:
 
         self.actor_arrow_downforce = self.plotter.add_mesh(
             unit_arrow_down.copy(),
-            color="#14161A",
+            color="#D92632",
             opacity=1.0,
             smooth_shading=True,
             ambient=0.65,
         )
         self.actor_arrow_drag = self.plotter.add_mesh(
             unit_arrow_drag.copy(),
-            color="#14161A",
+            color="#D92632",
             opacity=1.0,
             smooth_shading=True,
             ambient=0.65,
@@ -269,7 +269,7 @@ class F1XRayCarRenderer:
             )
             self.wheel_actors[corner].user_matrix = M_wheel
 
-        # Update 6 White Force Arrows
+        # Update 6 Red Force Arrows
         tire_loads = {
             "FL": float(sample["fz_fl_kn"]),
             "FR": float(sample["fz_fr_kn"]),
