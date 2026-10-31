@@ -496,7 +496,7 @@ def optimise_energy(
                 consistent = True
                 break
             p_cur = np.array(p_eff, dtype=np.float64)
-        feasible = consistent and (min(soc) >= soc_min - 1e-6) and (soc[-1] >= soc_end_min - 1e-6)
+        feasible = consistent and (min(soc) >= soc_min - 1e-6) and (soc[-1] >= soc_min - 1e-6)
         return info, harv, dep, brk, soc, rech, dep_e, np.array(p_eff), feasible
 
     # nodes -> blocks helpers
@@ -521,7 +521,8 @@ def optimise_energy(
     rech_phys_est = float(np.sum(harv_brk * dts_init * eta_h / 1000.0)) + (sc_max if sc_max is not None else 0.0) + 0.35
     rech_max = min(rech_max, rech_phys_est)
     if mdf > 0.0:
-        forced = (s_j >= 3300.0) & (block_mean(np.array(dep)) > 30.0)
+        straight_blocks = (s_j <= 220.0) | ((s_j >= 720.0) & (s_j <= 1300.0)) | (s_j >= 3300.0)
+        forced = straight_blocks & (block_mean(np.array(dep)) > 30.0)
 
     converged = False
     phase_it = 0
@@ -615,7 +616,8 @@ def optimise_energy(
                                     for pl, bk in zip(list(info.plim) + [info.plim[-1]], brk)])
                 idle = (np.abs(p_node) < 6.0) & (sc_like > 0) & (np.array(dep) > 50.0)
                 new_forced = block_mean(idle.astype(float)) >= 0.15
-                forced = new_forced if forced is None else (forced | new_forced | ((s_j >= 3300.0) & (dbound > 30.0)))
+                straight_blocks = (s_j <= 220.0) | ((s_j >= 720.0) & (s_j <= 1300.0)) | (s_j >= 3300.0)
+                forced = new_forced if forced is None else (forced | new_forced | (straight_blocks & (dbound > 30.0)))
                 forced_nodes = forced[blk] & (sc_like > 0)
                 p_proj = p_node.copy()
                 info, harv, dep, brk, soc, rech, dep_e, p_node, _ = evaluate(p_proj)
