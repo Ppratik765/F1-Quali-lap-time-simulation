@@ -384,7 +384,7 @@ class LapModel:
             else:
                 p_crank = max(0.0, f_req) * vc / 1000.0 / self.eta_dt
                 if info.plim[i]:
-                    harv[i] = hmax
+                    harv[i] = min(hmax, float(pu.get("superclip_max_kw", hmax)))   # harvest at full throttle (0 = no superclip)
                 else:
                     harv[i] = max(0.0, min(hmax, self.ice_kw - p_crank))
                 dep[i] = mguk_max_deploy_kw(vc * 3.6, pu)

@@ -63,6 +63,7 @@
     "es_harvest_efficiency": 0.92,
     "max_recharge_per_lap_mj": 7.0,
     "mguk_max_harvest_kw": -350.0,
+    "superclip_max_kw": 350.0,
     "mguk_taper_v1_kmh": 290.0,
     "mguk_taper_v2_kmh": 340.0,
     "mguk_taper_v3_kmh": 345.0,
