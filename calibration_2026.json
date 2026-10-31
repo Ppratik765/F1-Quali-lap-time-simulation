@@ -1,0 +1,57 @@
+{
+  "parameters": {
+    "cl_scale": 0.9887958464398969,
+    "cd_scale": 1.029121091738343,
+    "grip_scale": 1.1120400649681685,
+    "power_scale": 0.9289121305197479
+  },
+  "in_sample": {
+    "austria": {
+      "lap_time_error_s": 0.23670299039059728,
+      "speed_rms_kmh": 15.318630979347166
+    },
+    "spain": {
+      "lap_time_error_s": 0.19039784097118684,
+      "speed_rms_kmh": 15.524642864917467
+    },
+    "silverstone": {
+      "lap_time_error_s": -0.6896219091304943,
+      "speed_rms_kmh": 10.844874923775041
+    }
+  },
+  "leave_one_out": {
+    "austria": {
+      "theta": [
+        1.0491829375977244,
+        1.0421179460336858,
+        1.0777448072507823,
+        0.9422283827851056
+      ],
+      "lap_time_error_s": 0.48366500995626893,
+      "speed_rms_kmh": 15.306164233890055
+    },
+    "spain": {
+      "theta": [
+        0.9964376831054684,
+        1.0487225341796877,
+        1.0886349487304685,
+        0.9609738159179688
+      ],
+      "lap_time_error_s": 0.6375249866276391,
+      "speed_rms_kmh": 15.594301644754863
+    },
+    "silverstone": {
+      "theta": [
+        1.0437472180160696,
+        0.9817935222340748,
+        1.0735705556045287,
+        0.9771719609550202
+      ],
+      "lap_time_error_s": -1.549041171989927,
+      "speed_rms_kmh": 11.328245316822594
+    }
+  },
+  "notes": "Fitted with the full energy-limited model on real 2026 qualifying laps (OpenF1). Use leave_one_out errors, not in_sample, as the honest accuracy estimate.",
+  "loo_rms_lap_error_s": 1.0066277867133901,
+  "loo_mean_lap_error_s": -0.142617058468673
+}

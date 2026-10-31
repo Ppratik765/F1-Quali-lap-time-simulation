@@ -1,0 +1,14 @@
+{
+  "austria": {
+    "file": "data/austria_2026_telemetry.npz",
+    "altitude_m": 660.0
+  },
+  "spain": {
+    "file": "data/spain_2026_telemetry.npz",
+    "altitude_m": 120.0
+  },
+  "silverstone": {
+    "file": "data/silverstone_2026_telemetry.npz",
+    "altitude_m": 150.0
+  }
+}

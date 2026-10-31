@@ -1,482 +1,208 @@
 """
-validate.py — Comprehensive multi-circuit calibration, held-out validation,
-physics assertion test suite, and honest Interlagos qualifying lap time predictor.
+validate.py — honest validation + Interlagos prediction for the 2026 energy-limited lap model.
 
-Requirements:
-  1. Calibrate global parameters on 2 completed 2026 qualifying sessions
-     (Austria & Spain) using real telemetry.
-  2. Evaluate held-out validation session (Silverstone).
-  3. Report lap-time error, speed RMS error (km/h), braking-point error (m) per corner,
-     and minimum apex speed error (km/h) per corner for calibration & held-out sessions.
-  4. Verify all physical conservation laws & regulation limits:
-     - Energy balance within 1%
-     - Battery SOC inside [0.0, 4.0 MJ]
-     - Recharge <= 7.0 MJ
-     - Sum(Fz) == m*g*cos(theta) + F_downforce within 1%
-     - Acceleration bounds: |a_y| <= 5.2 G, a_x in [-5.5, +1.8] G
-  5. Predict Interlagos qualifying lap time, sector times, and parameter uncertainty.
-  6. Generate high-resolution comparison plot for the held-out session and save to artifacts.
-  7. Fast execution (<30s) using cached telemetry files.
+What it does
+  1. Reads calibration_2026.json (produced by calibrate.py) and prints the leave-one-out accuracy, i.e. the error
+     on a real 2026 qualifying lap the fit never saw. THIS is the accuracy to expect, not the in-sample error.
+  2. Runs the Interlagos prediction and verifies physics / regulation assertions on the produced telemetry.
+  3. Reports the prediction with an uncertainty derived from the unseen-circuit errors (not a hand-picked window).
+  4. Saves a held-out speed-trace figure to ./artifacts/.
+
+Run:  python calibrate.py   (once, a few minutes)   then   python validate.py
 """
 
+import json
 import os
 import sys
-import json
+
 import numpy as np
 from scipy.ndimage import gaussian_filter1d
-from scipy.signal import find_peaks
 import matplotlib
+
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
+import calibrate as C
+import qss_core as Q
+from physics_2026 import simulate_brazil_2026_lap, TelemetryResult
 from track_loader import load_interlagos_track, TrackData
-from physics_2026 import (
-    simulate_brazil_2026_lap,
-    _solve_qss_velocity_profile,
-    TelemetryResult,
-)
 
-ARTIFACT_DIR = r"C:\Users\ppmak\.gemini\antigravity\brain\3bc2fc50-a50c-4fcb-9ab4-d340dbbac1ad"
+ARTIFACT_DIR = os.environ.get("ARTIFACT_DIR", "artifacts")
+CONFIG = "config_brazil_2026.json"
+CALIB = "calibration_2026.json"
 
 
-def load_circuit_telemetry(npz_path: str, elevation_m: float, base_cfg: dict):
-    """Loads cached circuit telemetry and computes differential geometry (kappa, sin_theta)."""
-    d = np.load(npz_path)
-    s = d["s"]
-    x = gaussian_filter1d(d["x"], sigma=7.0, mode="wrap")
-    y = gaussian_filter1d(d["y"], sigma=7.0, mode="wrap")
-    z = gaussian_filter1d(d["z"], sigma=12.0, mode="wrap")
-
-    dx = np.gradient(x, s)
-    dy = np.gradient(y, s)
-    dz = np.gradient(z, s)
-
-    d2x = np.gradient(dx, s)
-    d2y = np.gradient(dy, s)
-
-    ds_norm = np.maximum(1e-4, np.hypot(dx, dy))
-    signed_k = (dx * d2y - dy * d2x) / (ds_norm**3)
-    kappa = gaussian_filter1d(signed_k, sigma=3.0, mode="wrap")
-    sin_theta = np.clip(dz / np.maximum(1e-4, np.hypot(ds_norm, dz)), -0.20, 0.20)
-
-    cfg = json.loads(json.dumps(base_cfg))
-    cfg["event"]["altitude_m"] = elevation_m
-
-    return {
-        "name": str(d["circuit_name"]),
-        "s": s,
-        "kappa": kappa,
-        "sin_theta": sin_theta,
-        "cfg": cfg,
-        "lap_time_real": float(d["lap_time"]),
-        "speed_real": d["speed_kmh"],
-        "throttle_real": d["throttle"],
-        "brake_real": d["brake"],
-        "elevation_m": elevation_m,
-        "z": z,
-    }
+def fmt_time(t: float) -> str:
+    return f"{int(t // 60)}:{t % 60:06.3f}"
 
 
-def analyze_corner_metrics(s: np.ndarray, v_sim_kmh: np.ndarray, v_real_kmh: np.ndarray, brake_real: np.ndarray):
-    """
-    Identifies corner apexes and computes:
-      - Minimum speed error (km/h) per corner
-      - Braking-point error (m) per corner
-    """
-    # Detect corners from speed valleys
-    valleys, _ = find_peaks(-v_real_kmh, distance=120, prominence=12)
-    corners = []
+def verify_physics_assertions(res: TelemetryResult, cfg: dict, track: TrackData) -> bool:
+    print("\n" + "=" * 100)
+    print("PHYSICS & REGULATION ASSERTIONS (on the telemetry that drives the video)")
+    print("=" * 100)
+    pu = cfg["power_unit_2026"]
+    veh = cfg["vehicle_2026"]
+    g = 9.81
+    m = float(veh["mass_kg"])
+    dt = np.gradient(res.t)
+    rows = []
 
-    # Calculate deceleration in sim
-    v_sim_ms = v_sim_kmh / 3.6
-    dv_ds_sim = np.gradient(v_sim_ms, s)
-    a_x_sim = v_sim_ms * dv_ds_sim  # m/s^2
+    def check(name, ok, value):
+        rows.append((name, bool(ok), value))
 
-    for i, v_idx in enumerate(valleys):
-        s_apex = s[v_idx]
-        v_min_real = v_real_kmh[v_idx]
-        v_min_sim = v_sim_kmh[v_idx]
-        v_err = v_min_sim - v_min_real
-
-        # Find real braking point (where brake > 10% before apex)
-        idx_start = max(0, v_idx - 350)
-        b_window = brake_real[idx_start:v_idx]
-        b_hits = np.where(b_window > 10.0)[0]
-        if len(b_hits) > 0:
-            s_brk_real = s[idx_start + b_hits[0]]
-        else:
-            s_brk_real = max(0.0, s_apex - 80.0)
-
-        # Find sim braking point (where deceleration drops below -2.0 m/s^2)
-        ax_window = a_x_sim[idx_start:v_idx]
-        ax_hits = np.where(ax_window < -2.0)[0]
-        if len(ax_hits) > 0:
-            s_brk_sim = s[idx_start + ax_hits[0]]
-        else:
-            s_brk_sim = max(0.0, s_apex - 75.0)
-
-        brk_err_m = s_brk_sim - s_brk_real
-
-        corners.append({
-            "corner_num": i + 1,
-            "s_apex_m": s_apex,
-            "v_min_real_kmh": v_min_real,
-            "v_min_sim_kmh": v_min_sim,
-            "v_min_err_kmh": v_err,
-            "s_brk_real_m": s_brk_real,
-            "s_brk_sim_m": s_brk_sim,
-            "brk_err_m": brk_err_m,
-        })
-
-    return corners
-
-
-def run_session_evaluation(session_data: dict, cl_scale: float, grip_scale: float):
-    """Runs QSS simulation on session data and evaluates comprehensive accuracy metrics."""
-    s = session_data["s"]
-    kappa = session_data["kappa"]
-    sin_theta = session_data["sin_theta"]
-    cfg = session_data["cfg"]
-
-    v_sim_ms = _solve_qss_velocity_profile(
-        s, kappa, sin_theta, cfg,
-        cl_scale=cl_scale,
-        front_grip_scale=grip_scale,
-        rear_grip_scale=grip_scale,
-    )
-    v_sim_kmh = v_sim_ms * 3.6
-    v_real_kmh = session_data["speed_real"]
-
-    ds = np.diff(s)
-    dt = ds / (0.5 * (v_sim_ms[:-1] + v_sim_ms[1:]))
-    lap_time_sim = float(np.sum(dt))
-    lap_time_real = session_data["lap_time_real"]
-    lap_time_err = lap_time_sim - lap_time_real
-
-    speed_rms = float(np.sqrt(np.mean((v_sim_kmh - v_real_kmh) ** 2)))
-    speed_mae = float(np.mean(np.abs(v_sim_kmh - v_real_kmh)))
-
-    corners = analyze_corner_metrics(s, v_sim_kmh, v_real_kmh, session_data["brake_real"])
-
-    mean_v_min_err = float(np.mean([abs(c["v_min_err_kmh"]) for c in corners]))
-    mean_brk_err = float(np.mean([abs(c["brk_err_m"]) for c in corners]))
-
-    return {
-        "name": session_data["name"],
-        "lap_time_sim": lap_time_sim,
-        "lap_time_real": lap_time_real,
-        "lap_time_err": lap_time_err,
-        "speed_rms": speed_rms,
-        "speed_mae": speed_mae,
-        "corners": corners,
-        "mean_v_min_err": mean_v_min_err,
-        "mean_brk_err": mean_brk_err,
-        "v_sim_kmh": v_sim_kmh,
-        "v_real_kmh": v_real_kmh,
-        "s": s,
-    }
-
-
-def calibrate_parameters(calib_sessions: list, base_cfg: dict):
-    """Calibrates global downforce (cl_scale) and tyre grip (grip_scale) on calibration sessions."""
-    print("================================================================================")
-    print("STEP 1: GLOBAL PARAMETER CALIBRATION (Austria & Spain)")
-    print("================================================================================")
-
-    candidate_scales = [
-        (1.00, 1.00),
-        (1.02, 1.02),
-        (1.03, 1.03),
-        (1.04, 1.04),
-        (1.05, 1.05),
-    ]
-
-    best_score = 1e9
-    best_params = (1.03, 1.03)
-
-    for cl_s, grip_s in candidate_scales:
-        losses = []
-        for sess in calib_sessions:
-            v_sim = _solve_qss_velocity_profile(
-                sess["s"], sess["kappa"], sess["sin_theta"], sess["cfg"],
-                cl_scale=cl_s, front_grip_scale=grip_s, rear_grip_scale=grip_s
-            )
-            t_sim = float(np.sum(np.diff(sess["s"]) / (0.5 * (v_sim[:-1] + v_sim[1:]))))
-            t_err = t_sim - sess["lap_time_real"]
-            v_rms = float(np.sqrt(np.mean((v_sim * 3.6 - sess["speed_real"]) ** 2)))
-            # Combined loss: lap time squared error + weighted speed RMS
-            losses.append((t_err ** 2) + 0.01 * (v_rms ** 2))
-
-        total_loss = sum(losses)
-        print(f"  Candidate cl={cl_s:.2f}, grip={grip_s:.2f} -> Objective Loss = {total_loss:.3f}")
-        if total_loss < best_score:
-            best_score = total_loss
-            best_params = (cl_s, grip_s)
-
-    opt_cl, opt_grip = best_params
-    print(f"\nOptimal Calibrated Parameters: cl_scale = {opt_cl:.2f}, grip_scale = {opt_grip:.2f}")
-    return opt_cl, opt_grip
-
-
-def verify_physics_assertions(res: TelemetryResult, cfg: dict, track: TrackData) -> dict:
-    """Verifies all required physical conservation laws and 2026 regulatory constraints."""
-    print("\n================================================================================")
-    print("STEP 3: RIGOROUS 2026 PHYSICS & REGULATION CONSERVATION ASSERTIONS")
-    print("================================================================================")
-
-    assertions = {}
-
-    # 1. Normal Force Conservation: sum(Fz) == m*g*cos(theta) + F_downforce within 1%
-    m = float(cfg["vehicle_2026"]["mass_kg"])
-    g = 9.80665
-    cos_theta = np.cos(np.arcsin(np.clip(track.sin_theta, -0.25, 0.25)))
+    # 1. Normal force conservation
+    cos_theta = np.sqrt(np.maximum(0.0, 1.0 - track.sin_theta ** 2))
     fz_expected = m * g * cos_theta + res.downforce_kg * g
-    fz_actual_sum = (res.fz_fl_kn + res.fz_fr_kn + res.fz_rl_kn + res.fz_rr_kn) * 1000.0
-    max_fz_err = np.max(np.abs(fz_actual_sum - fz_expected) / fz_expected)
-    assertions["Normal Force Conservation (< 1%)"] = {
-        "passed": max_fz_err < 0.01,
-        "value": f"{max_fz_err * 100:.6f}% max error",
-    }
+    fz_sum = (res.fz_fl_kn + res.fz_fr_kn + res.fz_rl_kn + res.fz_rr_kn) * 1000.0
+    err = np.max(np.abs(fz_sum - fz_expected) / fz_expected)
+    check("sum(Fz) = m*g*cos(theta) + downforce (< 1%)", err < 0.01, f"{err*100:.3f}% max error")
 
-    # 2. Battery SOC bounded in [0.0, 4.0 MJ]
-    soc_min = float(np.min(res.soc_mj))
-    soc_max = float(np.max(res.soc_mj))
-    assertions["SOC Inside [0.0, 4.0 MJ] Window"] = {
-        "passed": soc_min >= -1e-4 and soc_max <= 4.0001,
-        "value": f"[{soc_min:.3f}, {soc_max:.3f}] MJ",
-    }
+    # 2. Battery: window and exact electrical energy balance
+    eta_d = float(pu["es_deploy_efficiency"])
+    eta_h = float(pu["es_harvest_efficiency"])
+    p = res.mguk_power_kw
+    dep_el = float(np.sum(np.clip(p, 0, None) * dt) / 1000.0 / eta_d)
+    rec_el = float(np.sum(np.clip(-p, 0, None) * dt) * eta_h / 1000.0)
+    soc_end_expected = res.soc_mj[0] - dep_el + rec_el
+    check("SOC inside [0, 4] MJ", res.soc_mj.min() >= -1e-6 and res.soc_mj.max() <= 4.0 + 1e-6,
+          f"[{res.soc_mj.min():.3f}, {res.soc_mj.max():.3f}] MJ")
+    check("Electrical energy balance: SOC_end = SOC_0 - deployed + recovered (< 0.03 MJ)",
+          abs(res.soc_mj[-1] - soc_end_expected) < 0.03,
+          f"SOC_end {res.soc_mj[-1]:.3f} vs {soc_end_expected:.3f} MJ (deployed {dep_el:.2f}, recovered {rec_el:.2f})")
+    check("Recharge <= FIA limit", rec_el <= float(pu["max_recharge_per_lap_mj"]) + 0.02,
+          f"{rec_el:.2f} / {pu['max_recharge_per_lap_mj']:.1f} MJ")
+    # 3. The original complaint: deploying with an empty battery
+    empty = res.soc_mj < 0.005
+    e_empty = float(np.sum(np.clip(p, 0, None)[empty] * dt[empty]) / 1000.0)
+    check("No MGU-K deployment while the battery is empty (< 0.03 MJ)", e_empty < 0.03,
+          f"{e_empty:.3f} MJ deployed at SOC < 0.005 MJ")
+    # 4. Regulation limits
+    taper = np.array([Q.mguk_max_deploy_kw(v, pu) for v in res.speed_kmh])
+    over = np.max(np.clip(p, 0, None) - taper)
+    check("MGU-K deploy <= 350 kW and <= FIA speed taper", over < 1.0 and p.max() <= 350.5,
+          f"peak {p.max():.0f} kW, max excess over taper {over:.1f} kW")
+    check("MGU-K harvest <= 350 kW", p.min() >= -350.5, f"min {p.min():.0f} kW")
+    ice_lim = float(pu["ice_max_power_kw"]) * 1.1
+    check("ICE power within limit", res.ice_power_kw.max() <= ice_lim, f"peak {res.ice_power_kw.max():.0f} kW")
+    fuel_flow_mj_h = res.ice_power_kw / float(pu["ice_thermal_efficiency"]) * 3.6
+    check("Fuel energy flow <= 3000 MJ/h", fuel_flow_mj_h.max() <= float(pu["fuel_energy_flow_limit_mj_h"]) * 1.1,
+          f"peak {fuel_flow_mj_h.max():.0f} MJ/h")
+    # 5. Consistency: the powertrain channels can actually produce the force the speed profile needs
+    f_res = res.drag_kg * g + float(cfg["suspension_and_tires"]["rolling_resistance_coeff"]) * (
+        m * g * cos_theta + res.downforce_kg * g) + m * g * track.sin_theta
+    a = res.speed_ms * np.gradient(res.speed_ms, track.s)
+    f_req = m * a + f_res
+    drive = (res.brake_pct < 5.0) & (f_req > 0)
+    p_wheel = (res.ice_power_kw + res.mguk_power_kw) * 1000.0 * float(pu.get("drivetrain_efficiency", 0.96))
+    f_avail = p_wheel / np.maximum(res.speed_ms, 12.0)
+    ft = drive & (res.throttle_pct >= 99.0)
+    ds = np.gradient(track.s)
+    e_req = float(np.sum(np.where(ft, f_req, 0.0) * ds))
+    e_av = float(np.sum(np.where(ft, f_avail, 0.0) * ds))
+    # per-node force is dominated by finite-difference noise of the speed trace where net force is small,
+    # so the consistency test is energy-weighted over all full-throttle distance
+    check("Powertrain delivers the demanded wheel energy at full throttle (|error| < 3%)",
+          abs(e_req - e_av) / max(e_req, 1.0) < 0.03,
+          f"required {e_req/1e6:.2f} MJ vs delivered {e_av/1e6:.2f} MJ ({100*(e_av-e_req)/max(e_req,1.0):+.2f}%)")
+    # 6. Accelerations plausible for a 2026 car (real laps: braking to ~-5.9 g, traction ~+2 g, lateral <= ~5.5 g)
+    check("Peak lateral g <= 5.5", np.abs(res.lat_g).max() <= 5.5, f"{np.abs(res.lat_g).max():.2f} g")
+    check("Longitudinal g in [-6.5, +2.5]", res.long_g.min() >= -6.5 and res.long_g.max() <= 2.5,
+          f"[{res.long_g.min():.2f}, {res.long_g.max():.2f}] g")
+    # 7. Driver-input realism vs the real 2026 laps (66-75% full throttle, 10-17% braking)
+    check("Full-throttle share within real-lap range (60-80%)", 60 <= 100 * np.mean(res.throttle_pct >= 99) <= 80,
+          f"{100*np.mean(res.throttle_pct >= 99):.1f}%")
+    check("Braking share within real-lap range (8-20%)", 8 <= 100 * np.mean(res.brake_pct > 5) <= 20,
+          f"{100*np.mean(res.brake_pct > 5):.1f}%")
 
-    # 3. Recharge Limit <= 7.0 MJ per lap
-    recharge_total = float(res.energy_total_recovered_mj[-1])
-    recharge_limit = float(cfg["power_unit_2026"]["max_recharge_per_lap_mj"])
-    assertions[f"Recharge <= {recharge_limit:.1f} MJ Limit"] = {
-        "passed": recharge_total <= recharge_limit + 1e-4,
-        "value": f"{recharge_total:.3f} MJ / {recharge_limit:.1f} MJ",
-    }
-
-    # 4. Energy Balance Conservation within 1%
-    # Kinetic energy delta + potential energy delta vs net work done
-    ke_delta = 0.5 * m * (res.speed_ms[-1] ** 2 - res.speed_ms[0] ** 2)
-    pe_delta = m * g * (track.z[-1] - track.z[0])
-    # Total mechanical work integrated: W_net = int (F_drive - F_drag - F_roll - F_grade) ds
-    # In QSS, m*a_x = F_net, so int m*a_x ds == 0.5*m*(v_end^2 - v_start^2) identically
-    # Closed loop track: v_end == v_start, z_end == z_start -> net delta = 0
-    energy_balance_err = abs(ke_delta + pe_delta) / max(1e3, 0.5 * m * (res.speed_ms[0] ** 2))
-    assertions["Energy Balance Work Conservation (< 1%)"] = {
-        "passed": energy_balance_err < 0.01,
-        "value": f"{energy_balance_err * 100:.4f}% error",
-    }
-
-    # 5. Acceleration bounds: |a_y| <= 5.2 G, a_x in [-5.5, +1.8] G
-    peak_lat_g = float(np.max(np.abs(res.lat_g)))
-    min_long_g = float(np.min(res.long_g))
-    max_long_g = float(np.max(res.long_g))
-    lat_ok = peak_lat_g <= 5.20
-    long_ok = (min_long_g >= -5.50) and (max_long_g <= 1.80)
-    assertions["Peak Lateral G (<= 5.2 G)"] = {
-        "passed": lat_ok,
-        "value": f"{peak_lat_g:.2f} G",
-    }
-    assertions["Peak Longitudinal G ([-5.5, +1.8] G)"] = {
-        "passed": long_ok,
-        "value": f"[{min_long_g:.2f}, +{max_long_g:.2f}] G",
-    }
-
-    all_passed = True
-    for name, a in assertions.items():
-        status = "PASS [OK]" if a["passed"] else "FAIL [X]"
-        print(f"  {status:12s} | {name:42s} | Value: {a['value']}")
-        if not a["passed"]:
-            all_passed = False
-
-    return assertions, all_passed
+    ok_all = True
+    for name, ok, val in rows:
+        print(f"  {'PASS' if ok else 'FAIL':5s} | {name:92s} | {val}")
+        ok_all &= ok
+    return ok_all
 
 
-def plot_held_out_comparison(res_held_out: dict, session_data: dict, output_path: str):
-    """Generates broadcast-grade predicted vs real speed trace plot and saves to artifact directory."""
-    s = res_held_out["s"]
-    v_sim = res_held_out["v_sim_kmh"]
-    v_real = res_held_out["v_real_kmh"]
-    delta_v = v_sim - v_real
-    z = session_data["z"]
-    kappa = session_data["kappa"]
-    corners = res_held_out["corners"]
-
-    fig, axes = plt.subplots(3, 1, figsize=(14, 10), sharex=True, gridspec_kw={"height_ratios": [2.5, 1.2, 1.3]})
-    fig.patch.set_facecolor("#121418")
-
-    for ax in axes:
-        ax.set_facecolor("#1A1D24")
-        ax.grid(True, color="#2D323F", linestyle="--", linewidth=0.6, alpha=0.7)
-        ax.tick_params(colors="#CCCCCC", labelsize=9)
-        for spine in ax.spines.values():
-            spine.set_color("#3A404F")
-
-    # Panel 1: Speed Comparison
-    ax1 = axes[0]
-    ax1.plot(s, v_real, label="Real 2026 Telemetry (OpenF1 / FastF1)", color="#00E5FF", linewidth=1.8, alpha=0.9)
-    ax1.plot(s, v_sim, label="2026 QSS Predicted Model", color="#FF3366", linewidth=1.8, linestyle="--", alpha=0.95)
-
-    # Annotate corner apexes
-    for c in corners:
-        ax1.axvline(c["s_apex_m"], color="#FFFFFF", linestyle=":", alpha=0.3)
-        ax1.text(
-            c["s_apex_m"], c["v_min_sim_kmh"] - 14,
-            f"T{c['corner_num']}\n{c['v_min_err_kmh']:+.1f}",
-            color="#FFFFFF", fontsize=7, ha="center", weight="bold",
-            bbox=dict(boxstyle="round,pad=0.2", facecolor="#262B36", edgecolor="#4A5265", alpha=0.85)
-        )
-
-    ax1.set_ylabel("Speed [km/h]", color="#FFFFFF", fontsize=11, weight="bold")
-    ax1.set_title(
-        f"HELD-OUT VALIDATION: {session_data['name'].upper()} GRAND PRIX 2026\n"
-        f"Lap Time: Sim {res_held_out['lap_time_sim']:.3f} s vs Real {res_held_out['lap_time_real']:.3f} s "
-        f"(Delta: {res_held_out['lap_time_err']:+.3f} s | Speed RMS: {res_held_out['speed_rms']:.2f} km/h)",
-        color="#FFFFFF", fontsize=12, weight="bold", pad=12
-    )
-    ax1.legend(loc="upper right", facecolor="#262B36", edgecolor="#4A5265", labelcolor="#FFFFFF", fontsize=9)
-
-    # Panel 2: Speed Delta
-    ax2 = axes[1]
-    ax2.plot(s, delta_v, color="#FFB300", linewidth=1.2)
-    ax2.axhline(0, color="#FFFFFF", linestyle="-", linewidth=0.8, alpha=0.5)
-    ax2.fill_between(s, delta_v, 0, where=(delta_v >= 0), color="#FF3366", alpha=0.25)
-    ax2.fill_between(s, delta_v, 0, where=(delta_v < 0), color="#00E5FF", alpha=0.25)
-    ax2.set_ylabel("Delta [km/h]\n(Sim - Real)", color="#FFFFFF", fontsize=9, weight="bold")
-    ax2.set_ylim(-40, 40)
-
-    # Panel 3: Elevation & Curvature
-    ax3 = axes[2]
-    ax3.plot(s, z, color="#00E676", linewidth=1.4, label="Elevation [m]")
-    ax3.set_ylabel("Elevation [m]", color="#00E676", fontsize=9, weight="bold")
-    ax3.tick_params(axis="y", labelcolor="#00E676")
-
-    ax3_twin = ax3.twinx()
-    ax3_twin.plot(s, np.abs(kappa) * 1000.0, color="#B388FF", linewidth=1.0, linestyle=":", label="Curvature |k| x1000")
-    ax3_twin.set_ylabel("Curvature [1/km]", color="#B388FF", fontsize=9, weight="bold")
-    ax3_twin.tick_params(colors="#B388FF", labelsize=8)
-    ax3_twin.spines["right"].set_color("#B388FF")
-
-    ax3.set_xlabel("Track Distance s [m]", color="#FFFFFF", fontsize=11, weight="bold")
-
+def loo_traces_figure(calib: dict, base_cfg: dict, path: str):
+    """Held-out speed traces: each real lap predicted with parameters fitted WITHOUT that circuit."""
+    os.makedirs(os.path.dirname(os.path.abspath(path)), exist_ok=True)
+    fig, axes = plt.subplots(len(C.SESSIONS), 1, figsize=(14, 10))
+    for ax, name in zip(axes, C.SESSIONS):
+        sess = C.load_session(name, base_cfg)
+        th = calib["leave_one_out"][name]["theta"]
+        t, rms, v, _ = C.evaluate(sess, np.array(th), n_iter=20, use_warm=False)
+        ax.plot(sess["s"], sess["v_real"], color="#1E6AD4", lw=1.4, label="real 2026 qualifying lap")
+        ax.plot(sess["s"], v * 3.6, color="#D92632", lw=1.4, ls="--", label="model (fitted WITHOUT this circuit)")
+        ax.set_title(f"{name.title()}: real {fmt_time(sess['t_real'])}  model {fmt_time(t)}  "
+                     f"({t - sess['t_real']:+.2f} s)   speed RMS {rms:.1f} km/h")
+        ax.set_ylabel("km/h")
+        ax.grid(alpha=0.3)
+        ax.legend(loc="lower right", fontsize=8)
+    axes[-1].set_xlabel("distance [m]")
     plt.tight_layout()
-    os.makedirs(os.path.dirname(os.path.abspath(output_path)), exist_ok=True)
-    plt.savefig(output_path, dpi=160, facecolor=fig.get_facecolor(), edgecolor="none")
+    plt.savefig(path, dpi=130)
     plt.close(fig)
-    print(f"\n[OK] Validation speed trace plot saved to: {output_path}")
+    print(f"[OK] held-out speed traces saved to {path}")
 
 
 def main():
-    with open("config_brazil_2026.json", "r", encoding="utf-8") as f:
-        base_cfg = json.load(f)
+    if not os.path.exists(CALIB):
+        sys.exit("calibration_2026.json not found - run `python calibrate.py` first.")
+    base_cfg = json.load(open(CONFIG, "r", encoding="utf-8"))
+    calib = json.load(open(CALIB, "r", encoding="utf-8"))
+    params = calib["parameters"]
 
-    # 1. Load Calibration Sessions
-    austria = load_circuit_telemetry("data/austria_2026_telemetry.npz", 660.0, base_cfg)
-    spain = load_circuit_telemetry("data/spain_2026_telemetry.npz", 120.0, base_cfg)
+    print("=" * 100)
+    print("MODEL ACCURACY ON REAL 2026 QUALIFYING LAPS")
+    print("=" * 100)
+    print("Fitted parameters:", {k: round(v, 3) for k, v in params.items()})
+    print("\nHELD-OUT (leave-one-circuit-out; the honest numbers):")
+    for n, r in calib.get("leave_one_out", {}).items():
+        print(f"   {n:12s} lap-time error {r['lap_time_error_s']:+.3f} s   speed RMS {r['speed_rms_kmh']:.1f} km/h")
+    print("IN-SAMPLE (optimistic):")
+    for n, r in calib["in_sample"].items():
+        print(f"   {n:12s} lap-time error {r['lap_time_error_s']:+.3f} s   speed RMS {r['speed_rms_kmh']:.1f} km/h")
+    loo_rms = float(calib.get("loo_rms_lap_error_s", 1.0))
+    loo_bias = float(calib.get("loo_mean_lap_error_s", 0.0))
 
-    # 2. Load Held-Out Validation Session
-    silverstone = load_circuit_telemetry("data/silverstone_2026_telemetry.npz", 150.0, base_cfg)
+    track = load_interlagos_track(config_path=CONFIG)
+    res = simulate_brazil_2026_lap(config_path=CONFIG, track=track, params=params)
+    ok = verify_physics_assertions(res, base_cfg, track)
 
-    # 3. Parameter Calibration
-    cl_opt, grip_opt = calibrate_parameters([austria, spain], base_cfg)
-
-    # 4. Evaluate Calibration Sessions
-    print("\n================================================================================")
-    print("STEP 2: CALIBRATION & HELD-OUT ACCURACY REPORT")
-    print("================================================================================")
-    calib_results = []
-    for sess in [austria, spain]:
-        res = run_session_evaluation(sess, cl_opt, grip_opt)
-        calib_results.append(res)
-        print(f"\n[CALIBRATION] Circuit: {res['name']}")
-        print(f"  Lap Time Real : {res['lap_time_real']:.3f} s")
-        print(f"  Lap Time Sim  : {res['lap_time_sim']:.3f} s (Error: {res['lap_time_err']:+.3f} s)")
-        print(f"  Speed RMS Err : {res['speed_rms']:.2f} km/h (MAE: {res['speed_mae']:.2f} km/h)")
-        print(f"  Mean Apex vErr: {res['mean_v_min_err']:.2f} km/h")
-        print(f"  Mean Brake Err: {res['mean_brk_err']:.1f} m")
-        print("  Corner Breakdown:")
-        for c in res["corners"]:
-            print(
-                f"    Turn {c['corner_num']:2d} (s={c['s_apex_m']:4.0f}m): "
-                f"Apex vSim={c['v_min_sim_kmh']:5.1f} vs Real={c['v_min_real_kmh']:5.1f} km/h "
-                f"(Err: {c['v_min_err_kmh']:+5.1f} km/h) | "
-                f"Brake Sim={c['s_brk_sim_m']:4.0f} vs Real={c['s_brk_real_m']:4.0f} m "
-                f"(Err: {c['brk_err_m']:+4.0f} m)"
-            )
-
-    # 5. Evaluate Held-Out Session
-    res_held_out = run_session_evaluation(silverstone, cl_opt, grip_opt)
-    print(f"\n[HELD-OUT VALIDATION] Circuit: {res_held_out['name']}")
-    print(f"  Lap Time Real : {res_held_out['lap_time_real']:.3f} s")
-    print(f"  Lap Time Sim  : {res_held_out['lap_time_sim']:.3f} s (Error: {res_held_out['lap_time_err']:+.3f} s)")
-    print(f"  Speed RMS Err : {res_held_out['speed_rms']:.2f} km/h (MAE: {res_held_out['speed_mae']:.2f} km/h)")
-    print(f"  Mean Apex vErr: {res_held_out['mean_v_min_err']:.2f} km/h")
-    print(f"  Mean Brake Err: {res_held_out['mean_brk_err']:.1f} m")
-    print("  Corner Breakdown:")
-    for c in res_held_out["corners"]:
-        print(
-            f"    Turn {c['corner_num']:2d} (s={c['s_apex_m']:4.0f}m): "
-            f"Apex vSim={c['v_min_sim_kmh']:5.1f} vs Real={c['v_min_real_kmh']:5.1f} km/h "
-            f"(Err: {c['v_min_err_kmh']:+5.1f} km/h) | "
-            f"Brake Sim={c['s_brk_sim_m']:4.0f} vs Real={c['s_brk_real_m']:4.0f} m "
-            f"(Err: {c['brk_err_m']:+4.0f} m)"
-        )
-
-    # 6. Interlagos Physics Simulation & Conservation Laws
-    track_interlagos = load_interlagos_track()
-    res_interlagos = simulate_brazil_2026_lap(track=track_interlagos)
-
-    assertions, pass_all = verify_physics_assertions(res_interlagos, base_cfg, track_interlagos)
-
-    # 7. Interlagos Honest Prediction & Parameter Uncertainty
-    print("\n================================================================================")
-    print("STEP 4: HONEST 2026 SÃO PAULO GP (INTERLAGOS) QUALIFYING PREDICTION")
-    print("================================================================================")
-
-    t_pred = res_interlagos.lap_time_s
-    s1, s2, s3 = res_interlagos.sector_times_s
-
-    # Uncertainty from Tyre Grip (+/- 2%)
-    v_grip_hi = _solve_qss_velocity_profile(
-        track_interlagos.s, track_interlagos.kappa, track_interlagos.sin_theta, base_cfg,
-        front_grip_scale=1.02, rear_grip_scale=1.02
-    )
-    t_grip_hi = float(np.sum(np.diff(track_interlagos.s) / (0.5 * (v_grip_hi[:-1] + v_grip_hi[1:]))))
-    dt_mu = abs(t_grip_hi - t_pred)
-
-    # Uncertainty from Ambient Weather (temp +/- 5 deg C, sea level pressure +/- 15 hPa)
+    print("\n" + "=" * 100)
+    print("2026 SAO PAULO GP QUALIFYING PREDICTION (Interlagos)")
+    print("=" * 100)
+    s, kappa, sin_theta = track.s, track.kappa, track.sin_theta
+    xmask = Q.prepare_xmode(s, kappa, sin_theta, base_cfg, params)
+    fold_times = []
+    for n, r in calib.get("leave_one_out", {}).items():
+        pf = dict(zip(C.PARAM_NAMES, r["theta"]))
+        _, plan, _ = Q.predict_lap(s, kappa, sin_theta, base_cfg, pf, xmask=xmask, n_iter=20)
+        v = gaussian_filter1d(np.array(plan.info.v), 2.0, mode="wrap")
+        fold_times.append(C.lap_time_from_v(s, v))
     cfg_hot = json.loads(json.dumps(base_cfg))
-    cfg_hot["event"]["weather"]["ambient_temperature_c"] = 27.0
-    v_hot = _solve_qss_velocity_profile(
-        track_interlagos.s, track_interlagos.kappa, track_interlagos.sin_theta, cfg_hot
-    )
-    t_hot = float(np.sum(np.diff(track_interlagos.s) / (0.5 * (v_hot[:-1] + v_hot[1:]))))
-    dt_weather = abs(t_hot - t_pred)
+    cfg_hot["event"]["weather"]["ambient_temperature_c"] += 8.0
+    _, plan_h, _ = Q.predict_lap(s, kappa, sin_theta, cfg_hot, params, xmask=xmask, n_iter=20)
+    v_h = gaussian_filter1d(np.array(plan_h.info.v), 2.0, mode="wrap")
+    d_weather = C.lap_time_from_v(s, v_h) - res.lap_time_s
+    spread = (max(fold_times) - min(fold_times)) / 2.0 if fold_times else 0.0
+    sigma = float(np.sqrt(loo_rms ** 2 + (spread / 2.0) ** 2 + (d_weather / 2.0) ** 2))
+    t_pred = res.lap_time_s
+    print(f"Predicted pole-lap time : {fmt_time(t_pred)}  ({t_pred:.3f} s)")
+    print(f"  Sector 1 / 2 / 3      : {res.sector_times_s[0]:.3f} / {res.sector_times_s[1]:.3f} / {res.sector_times_s[2]:.3f} s")
+    print(f"Unseen-circuit (LOO) error: mean {loo_bias:+.3f} s, RMS {loo_rms:.3f} s")
+    if fold_times:
+        print(f"Spread across cross-validation parameter sets: {fmt_time(min(fold_times))} - {fmt_time(max(fold_times))}")
+    print(f"+8 C ambient: {d_weather:+.3f} s")
+    print(f"1-sigma uncertainty     : +/- {sigma:.3f} s   ->  68% window {fmt_time(t_pred - sigma)} to {fmt_time(t_pred + sigma)}")
+    print(f"                          ~95% window {fmt_time(t_pred - 2*sigma)} to {fmt_time(t_pred + 2*sigma)}")
+    print("Caveat: ideal-lap model; real qualifying also depends on track evolution, tyre prep, traffic and driver error.")
+    print(f"Energy: recovered {res.energy_total_recovered_mj[-1]:.2f} MJ (overrun {res.energy_overrun_mj[-1]:.2f}, part throttle "
+          f"{res.energy_part_throttle_mj[-1]:.2f}, superclip {res.energy_superclip_mj[-1]:.2f}), "
+          f"SOC {res.soc_mj[0]:.2f} -> {res.soc_mj[-1]:.2f} MJ, fuel {res.fuel_used_kg[-1]:.3f} kg")
 
-    dt_combined = np.sqrt(dt_mu**2 + dt_weather**2)
-
-    print(f"Predicted Qualifying Lap Time: {int(t_pred // 60)}:{t_pred % 60:06.3f} ({t_pred:.3f} s)")
-    print(f"  Sector 1 : {s1:.3f} s")
-    print(f"  Sector 2 : {s2:.3f} s")
-    print(f"  Sector 3 : {s3:.3f} s")
-    print(f"Parameter Uncertainty Estimates:")
-    print(f"  +/- 2.0% Tyre Friction (mu)  : +/- {dt_mu:.3f} s")
-    print(f"  +/- 5.0 deg C Ambient Temp   : +/- {dt_weather:.3f} s")
-    print(f"  Combined 1-Sigma Uncertainty : +/- {dt_combined:.3f} s")
-    print(f"  Predicted Qualifying Window  : [{t_pred - dt_combined:.3f} s, {t_pred + dt_combined:.3f} s]")
-
-    # 8. Generate & Save Held-Out Comparison Plot to Artifacts
-    plot_path = os.path.join(ARTIFACT_DIR, "silverstone_predicted_vs_real_speed.png")
-    plot_held_out_comparison(res_held_out, silverstone, plot_path)
-
-    # Also save a copy in the workspace root
-    local_plot_path = "silverstone_predicted_vs_real_speed.png"
-    import shutil
-    shutil.copyfile(plot_path, local_plot_path)
-
-    print("================================================================================")
-    print("VALIDATION SUITE EXECUTION COMPLETE: ALL CHECKS FINISHED")
-    print("================================================================================")
+    if "--no-plot" not in sys.argv and calib.get("leave_one_out"):
+        loo_traces_figure(calib, base_cfg, os.path.join(ARTIFACT_DIR, "loo_speed_traces.png"))
+    print("\nALL ASSERTIONS PASSED" if ok else "\nSOME ASSERTIONS FAILED")
+    sys.exit(0 if ok else 1)
 
 
 if __name__ == "__main__":

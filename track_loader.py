@@ -9,9 +9,9 @@ Fails loudly if telemetry data is unavailable.
 import json
 import os
 from dataclasses import dataclass
-from typing import Dict, Optional
+from typing import Dict, Optional, Tuple
 import numpy as np
-from scipy.interpolate import CubicSpline
+from scipy.interpolate import CubicSpline, make_smoothing_spline
 from scipy.ndimage import gaussian_filter1d
 from scipy.signal import find_peaks
 
@@ -29,28 +29,76 @@ class TrackData:
     length_m: int = 4309
 
 
-def _compute_track_derivatives(s: np.ndarray, x: np.ndarray, y: np.ndarray, z: np.ndarray) -> tuple:
+def find_gps_vertices(x: np.ndarray, y: np.ndarray, s: np.ndarray) -> np.ndarray:
     """
-    Computes tangent heading, signed curvature kappa(s), and vertical slope sin(theta) = dz/ds
-    directly from 3D coordinates using consistent analytical derivatives.
+    OpenF1 position samples (~3.8 Hz) are linearly interpolated onto the 1 m grid, so the original GPS samples
+    are the kinks of the polyline. Recovering them gives the true measurement points (and their noise level).
+    Falls back to a regular 12 m subsample for data that is already smooth (e.g. pre-smoothed caches).
     """
-    dx = np.gradient(x, s)
-    dy = np.gradient(y, s)
-    ddx = np.gradient(dx, s)
-    ddy = np.gradient(dy, s)
+    d2 = np.abs(np.diff(x, 2)) + np.abs(np.diff(y, 2))
+    idx = np.where(d2 > 1e-5)[0] + 1
+    keep = [0]
+    for i in idx:
+        if i - keep[-1] > 3:
+            keep.append(int(i))
+    if keep[-1] != len(s) - 1:
+        keep.append(len(s) - 1)
+    keep = np.asarray(keep)
+    expected = (s[-1] - s[0]) / 20.0
+    if len(keep) < 0.5 * expected or len(keep) > 3.0 * expected:
+        step = 12
+        keep = np.unique(np.concatenate([np.arange(0, len(s), step), [len(s) - 1]]))
+    return keep
 
-    # Tangent heading
-    heading_rad = np.unwrap(np.arctan2(dy, dx))
 
-    # Signed 2D curvature: kappa = (dx*ddy - dy*ddx) / (dx^2 + dy^2)^(3/2)
-    speed_sq = dx**2 + dy**2
-    speed_denom = np.maximum(1e-6, speed_sq ** 1.5)
-    kappa = (dx * ddy - dy * ddx) / speed_denom
+def _heading_spline_curvature(x, y, s, vi, lam, sigma_m=0.7, pad=12):
+    """Curvature = d(heading)/ds of a weighted smoothing spline fitted to the chord headings (1st derivative only)."""
+    sv, xv, yv = s[vi], x[vi], y[vi]
+    length = s[-1]
+    dxv, dyv = np.diff(xv), np.diff(yv)
+    h = np.maximum(1e-3, np.hypot(dxv, dyv))
+    sm = 0.5 * (sv[1:] + sv[:-1])
+    th = np.unwrap(np.arctan2(dyv, dxv))
+    w = h / (np.sqrt(2.0) * sigma_m)                       # 1 / sigma_theta
+    tot = 2.0 * np.pi * np.round((th[-1] - th[0]) / (2.0 * np.pi))
+    sp = np.concatenate([sm[-pad:] - length, sm, sm[:pad] + length])
+    tp = np.concatenate([th[-pad:] - tot, th, th[:pad] + tot])
+    wp = np.concatenate([w[-pad:], w, w[:pad]])
+    f = make_smoothing_spline(sp, tp, w=wp, lam=lam)
+    return f(s, 1), f(s)
 
-    # Vertical slope sin(theta) = dz/ds
-    sin_theta = np.clip(np.gradient(z, s), -0.15, 0.15)
 
+def estimate_curvature(x: np.ndarray, y: np.ndarray, s: np.ndarray,
+                       lam_light: float = 1e3, lam_heavy: float = 1e5,
+                       k_lo: float = 0.010, k_hi: float = 0.025) -> Tuple[np.ndarray, np.ndarray]:
+    """
+    Noise-robust signed curvature kappa(s) [1/m] and heading from noisy GPS.
+    Second derivatives of ~0.6 m-noise positions are useless (the previous gaussian+gradient approach implied
+    7-15 g lateral on real laps). Instead:
+      * heading is smoothed (needs only a first derivative),
+      * heavy smoothing is used on gentle sections, light smoothing in tight corners (|kappa| > k_lo..k_hi),
+    which keeps the real tight-corner radii while removing noise spikes.
+    Checked on three real 2026 qualifying laps: implied lateral g p99 = 4.8-5.3 g, max <= 5.9 g.
+    """
+    vi = find_gps_vertices(x, y, s)
+    k_l, th = _heading_spline_curvature(x, y, s, vi, lam_light)
+    k_h, _ = _heading_spline_curvature(x, y, s, vi, lam_heavy)
+    w = np.clip((np.abs(gaussian_filter1d(k_h, 10.0)) - k_lo) / (k_hi - k_lo), 0.0, 1.0)
+    w = gaussian_filter1d(w, 8.0)
+    return w * k_l + (1.0 - w) * k_h, th
+
+
+def compute_geometry(s: np.ndarray, x: np.ndarray, y: np.ndarray, z: np.ndarray) -> tuple:
+    """Heading, signed curvature and vertical slope sin(theta) = dz/ds from raw 3D coordinates."""
+    kappa, heading_rad = estimate_curvature(x, y, s)
+    z_s = gaussian_filter1d(z, 12.0, mode="wrap")
+    sin_theta = np.clip(np.gradient(z_s, s), -0.15, 0.15)
     return heading_rad, kappa, sin_theta
+
+
+def _compute_track_derivatives(s: np.ndarray, x: np.ndarray, y: np.ndarray, z: np.ndarray) -> tuple:
+    """Kept for backwards compatibility; see compute_geometry()."""
+    return compute_geometry(s, x, y, z)
 
 
 def _extract_corner_labels(s: np.ndarray, kappa: np.ndarray) -> Dict[str, float]:
@@ -125,6 +173,17 @@ def _load_or_fetch_real_telemetry(cache_file: str, length_m: int = 4309) -> tupl
     return s_grid, x_rot, y_rot, z_smooth
 
 
+def _grid_from_raw_samples(raw_file: str, length_m: int) -> tuple:
+    """Raw OpenF1 samples -> 1 m grid with the GPS kinks preserved (linear interpolation, like the session caches)."""
+    d = np.load(raw_file)
+    x, y, z = d["x"], d["y"], d["z"]
+    ds = np.hypot(np.diff(x), np.diff(y))
+    s_raw = np.concatenate([[0.0], np.cumsum(ds)])
+    s_raw *= float(length_m) / s_raw[-1]
+    s_grid = np.arange(0, length_m + 1, 1, dtype=np.float64)
+    return s_grid, np.interp(s_grid, s_raw, x), np.interp(s_grid, s_raw, y), np.interp(s_grid, s_raw, z)
+
+
 def load_interlagos_track(
     config_path: str = "config_brazil_2026.json",
     use_fastf1: bool = True,
@@ -146,7 +205,11 @@ def load_interlagos_track(
             "Real telemetry data is required to compute track geometry."
         )
 
-    s, x, y, z = _load_or_fetch_real_telemetry(cache_file=cache_file, length_m=length_m)
+    raw_file = os.path.join(os.path.dirname(os.path.abspath(cache_file)), "interlagos_raw_openf1.npz")
+    if os.path.exists(raw_file):
+        s, x, y, z = _grid_from_raw_samples(raw_file, length_m)
+    else:
+        s, x, y, z = _load_or_fetch_real_telemetry(cache_file=cache_file, length_m=length_m)
     heading_rad, kappa, sin_theta = _compute_track_derivatives(s, x, y, z)
     corner_labels = _extract_corner_labels(s, kappa)
 

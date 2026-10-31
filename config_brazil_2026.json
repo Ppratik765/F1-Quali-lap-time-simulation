@@ -1,10 +1,10 @@
 {
   "event": {
-    "title": "S\u00c3O PAULO GRAND PRIX 2026",
-    "subtitle": "Aut\u00f3dromo Jos\u00e9 Carlos Pace - 4309 m - qualifying",
+    "title": "SÃO PAULO GRAND PRIX 2026",
+    "subtitle": "Autódromo José Carlos Pace - 4309 m - qualifying",
     "watermark": "Priyanshu Pratik",
     "year": 2026,
-    "gp_name": "S\u00e3o Paulo",
+    "gp_name": "São Paulo",
     "session": "Q",
     "circuit_length_m": 4309,
     "altitude_m": 765.0,
@@ -58,12 +58,6 @@
     "soc_max_mj": 4.0,
     "mguk_max_deploy_kw": 350.0,
     "mguk_max_harvest_overrun_kw": -350.0,
-    "mguk_part_throttle_min_kw": -50.0,
-    "mguk_part_throttle_max_kw": -240.0,
-    "mguk_superclip_kw": -250.0,
-    "mguk_superclip_duration_s": 1.8,
-    "mguk_deadband_kw": 5.0,
-    "superclip_zones_m": [],
     "ice_thermal_efficiency": 0.48,
     "es_deploy_efficiency": 0.96,
     "es_harvest_efficiency": 0.92,
@@ -76,7 +70,8 @@
     "mguk_taper_s1_kw_per_kmh": 5.0,
     "mguk_taper_c2_kw": 6900.0,
     "mguk_taper_s2_kw_per_kmh": 20.0,
-    "drivetrain_efficiency": 0.96
+    "drivetrain_efficiency": 0.96,
+    "soc_end_min_mj": 0.0
   },
   "aerodynamics_2026": {
     "reference_area_m2": 1.6,
@@ -108,7 +103,8 @@
           "start_m": 0,
           "end_m": 225
         }
-      ]
+      ],
+      "zone_mode": "auto"
     }
   },
   "suspension_and_tires": {
