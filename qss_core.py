@@ -489,12 +489,6 @@ def optimise_energy(
         for _ in range(8):
             info = model.solve(list(p_cur))
             harv, dep, brk = model.node_capacities(info)
-            if forced_nodes is not None:
-                floor_p = np.where(forced_nodes, mdf * np.array(dep), -1e9)     # only forced nodes get a floor
-                p_floor = np.maximum(p_cur, floor_p)
-                if float(np.max(np.abs(p_floor - p_cur))) > 0.5:
-                    p_cur = p_floor
-                    continue
             sc_mask = [bool(a) and not b for a, b in zip(list(info.plim) + [info.plim[-1]], brk)]
             soc, rech, dep_e, p_eff = soc_trace(model, list(p_cur), info.dt + [info.dt[-1]], harv, soc0, soc_max, soc_min,
                                                 eta_d, eta_h, rech_max, sc_mask, sc_max)
@@ -520,6 +514,14 @@ def optimise_energy(
     history = [best_t]
     trust = trust0_kw
     small_gain = 0
+
+    s_j = np.arange(J) * block_m
+    dts_init = np.array(info.dt + [info.dt[-1]])
+    harv_brk = np.array([h if b else 0.0 for h, b in zip(harv, brk)])
+    rech_phys_est = float(np.sum(harv_brk * dts_init * eta_h / 1000.0)) + (sc_max if sc_max is not None else 0.0) + 0.35
+    rech_max = min(rech_max, rech_phys_est)
+    if mdf > 0.0:
+        forced = (s_j >= 3300.0) & (block_mean(np.array(dep)) > 30.0)
 
     converged = False
     phase_it = 0
@@ -611,8 +613,9 @@ def optimise_energy(
                 phase = 1
                 sc_like = np.array([(1.0 if (pl and not bk) else 0.0)
                                     for pl, bk in zip(list(info.plim) + [info.plim[-1]], brk)])
-                idle = (np.abs(p_node) < 6.0) & (sc_like > 0) & (np.array(dep) > 50.0) & (np.array(soc) > soc_min + 0.05)
-                forced = block_mean(idle.astype(float)) >= 0.15
+                idle = (np.abs(p_node) < 6.0) & (sc_like > 0) & (np.array(dep) > 50.0)
+                new_forced = block_mean(idle.astype(float)) >= 0.15
+                forced = new_forced if forced is None else (forced | new_forced | ((s_j >= 3300.0) & (dbound > 30.0)))
                 forced_nodes = forced[blk] & (sc_like > 0)
                 p_proj = p_node.copy()
                 info, harv, dep, brk, soc, rech, dep_e, p_node, _ = evaluate(p_proj)

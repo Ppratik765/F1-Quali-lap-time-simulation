@@ -63,7 +63,7 @@
     "ice_thermal_efficiency": 0.48,
     "es_deploy_efficiency": 0.96,
     "es_harvest_efficiency": 0.92,
-    "max_recharge_per_lap_mj": 7.0,
+    "max_recharge_per_lap_mj": 4.85,
     "mguk_max_harvest_kw": -350.0,
     "superclip_max_kw": 350.0,
     "superclip_max_mj_per_lap": 1.0,
@@ -76,7 +76,7 @@
     "mguk_taper_c2_kw": 6900.0,
     "mguk_taper_s2_kw_per_kmh": 20.0,
     "drivetrain_efficiency": 0.96,
-    "soc_end_min_mj": 0.0
+    "soc_end_min_mj": 0.08
   },
   "aerodynamics_2026": {
     "reference_area_m2": 1.6,
