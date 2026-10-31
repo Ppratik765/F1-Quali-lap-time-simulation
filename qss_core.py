@@ -406,13 +406,15 @@ class EnergyPlan:
 
 
 def soc_trace(model: LapModel, p_kw: List[float], dt: List[float], harvest_cap: List[float], soc0: float,
-              soc_max: float, soc_min: float, eta_d: float, eta_h: float, recharge_max: float):
+              soc_max: float, soc_min: float, eta_d: float, eta_h: float, recharge_max: float,
+              sc_mask: Optional[List[bool]] = None, sc_max_mj: Optional[float] = None):
     """Exact SOC integration with node-level physical limits. Returns (soc, recharged_mj, deployed_elec_mj, p_eff)."""
     n = model.n
     soc = [0.0] * n
     soc[0] = soc0
     rech = 0.0
     dep_e = 0.0
+    sc_e = 0.0                      # energy harvested at full throttle (superclip) so far
     p_eff = [0.0] * n
     for i in range(1, n):
         d = dt[i - 1]
@@ -427,6 +429,10 @@ def soc_trace(model: LapModel, p_kw: List[float], dt: List[float], harvest_cap: 
         else:
             ph = min(-p, harvest_cap[i - 1])
             e = ph * d * eta_h / 1000.0
+            is_sc = sc_mask is not None and sc_mask[i - 1]
+            if is_sc and sc_max_mj is not None and sc_e + e > sc_max_mj:
+                e = max(0.0, sc_max_mj - sc_e)
+                ph = e * 1000.0 / (eta_h * d) if d > 0 else 0.0
             if rech + e > recharge_max:
                 e = max(0.0, recharge_max - rech)
                 ph = e * 1000.0 / (eta_h * d) if d > 0 else 0.0
@@ -435,6 +441,8 @@ def soc_trace(model: LapModel, p_kw: List[float], dt: List[float], harvest_cap: 
                 ph = e * 1000.0 / (eta_h * d) if d > 0 else 0.0
             soc[i] = soc[i - 1] + e
             rech += e
+            if is_sc:
+                sc_e += e
             p = -ph
         p_eff[i - 1] = p
     p_eff[n - 1] = p_eff[n - 2]
@@ -459,6 +467,8 @@ def optimise_energy(
     soc_min = float(pu.get("soc_min_mj", 0.0))
     soc_end_min = float(pu.get("soc_end_min_mj", 0.0))
     rech_max = float(pu.get("max_recharge_per_lap_mj", 7.0))
+    sc_max = pu.get("superclip_max_mj_per_lap")            # energy that may be harvested at full throttle per lap
+    sc_max = None if sc_max is None else float(sc_max)
     margin = 0.02
 
     nb = int(math.ceil((n - 1) / block_m))
@@ -475,8 +485,9 @@ def optimise_energy(
         for _ in range(6):
             info = model.solve(list(p_cur))
             harv, dep, brk = model.node_capacities(info)
+            sc_mask = [bool(a) and not b for a, b in zip(list(info.plim) + [info.plim[-1]], brk)]
             soc, rech, dep_e, p_eff = soc_trace(model, list(p_cur), info.dt + [info.dt[-1]], harv, soc0, soc_max, soc_min,
-                                                eta_d, eta_h, rech_max)
+                                                eta_d, eta_h, rech_max, sc_mask, sc_max)
             if float(np.max(np.abs(np.array(p_eff) - p_cur))) < 0.5:
                 consistent = True
                 break
@@ -524,13 +535,19 @@ def optimise_energy(
         tr_b = [p0_j + trust, -(p0_j - trust)]
         bounds = [(0.0, float(max(0.0, d))) for d in dbound] + [(0.0, float(max(0.0, h))) for h in hbound]
         rech_row = np.concatenate([np.zeros(J), dt_j * eta_h / 1000.0])[None, :]
+        extra_A, extra_b = [], []
+        if sc_max is not None:
+            sc_nodes = np.array([(1.0 if (pl and not bk) else 0.0) for pl, bk in zip(list(info.plim) + [info.plim[-1]], brk)])
+            sc_dt_j = block_sum(dts * sc_nodes)
+            extra_A.append(np.concatenate([np.zeros(J), sc_dt_j * eta_h / 1000.0])[None, :])
+            extra_b.append(np.array([sc_max]))
         res = None
         # the current plan can sit exactly on the SOC limits (clamped), so the safety margin is relaxed if the LP
         # has no feasible point inside the trust region
         for mrg in (margin, 0.005, 0.0, -0.03):
-            A_ub = [S, -S, S[-1:] * -1.0, rech_row] + tr_A
+            A_ub = [S, -S, S[-1:] * -1.0, rech_row] + extra_A + tr_A
             b_ub = [np.full(J, soc_max - mrg - soc0), np.full(J, soc0 - (soc_min + mrg)),
-                    np.array([soc0 - soc_end_min - mrg]), np.array([rech_max - 0.02])] + tr_b
+                    np.array([soc0 - soc_end_min - mrg]), np.array([rech_max - 0.02])] + extra_b + tr_b
             res = linprog(c, A_ub=np.vstack(A_ub), b_ub=np.concatenate(b_ub), bounds=bounds, method="highs")
             if res.status == 0:
                 break

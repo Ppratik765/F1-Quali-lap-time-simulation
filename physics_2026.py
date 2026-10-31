@@ -301,11 +301,14 @@ def simulate_brazil_2026_lap(
     # ---- energy bookkeeping (exact, with the final time grid) ------------------------------------------------
     eta_deploy = float(pu.get("es_deploy_efficiency", 0.96))
     eta_harvest = float(pu.get("es_harvest_efficiency", 0.92))
-    harv_cap, _, _ = model.node_capacities(plan.info)
+    harv_cap, _, brk_nodes = model.node_capacities(plan.info)
+    sc_mask = [bool(a) and not b for a, b in zip(list(plan.info.plim) + [plan.info.plim[-1]], brk_nodes)]
+    sc_cap = pu.get("superclip_max_mj_per_lap")
     soc_l, rech, dep_e, p_eff = Q.soc_trace(
         model, list(p_mg), list(plan.info.dt) + [plan.info.dt[-1]], harv_cap,
         float(pu.get("soc_initial_mj", 4.0)), float(pu.get("soc_max_mj", 4.0)), float(pu.get("soc_min_mj", 0.0)),
         eta_deploy, eta_harvest, float(pu.get("max_recharge_per_lap_mj", 7.0)),
+        sc_mask, None if sc_cap is None else float(sc_cap),
     )
     soc_mj = np.array(soc_l)
     mguk_power_kw = np.array(p_eff)
