@@ -30,13 +30,13 @@ def _find_diagnostic_timestamps(tel: TelemetryResult) -> dict:
       2. frame_02_braking.png   : Heavy braking zone (HARVEST Overrun, -350 kW, nose dive)
       3. frame_03_cornering.png : High-G technical cornering / apex exit
     """
-    # 1. High-speed straight deployment / end-of-lap telemetry (full track map visible)
-    sc_indices = np.where((tel.mguk_state == "SUPERCLIP") & (tel.s >= 4085))[0]
-    if len(sc_indices) > 0:
-        idx_sc = int(sc_indices[int(len(sc_indices) * 0.55)])
+    # 1. Active SUPERCLIP on Reta Oposta (100% throttle, -250 kW, amber badge)
+    sc_reta = np.where((tel.mguk_state == 'SUPERCLIP') & (tel.s >= 1150) & (tel.s <= 1300))[0]
+    if len(sc_reta) > 0:
+        idx_sc = int(sc_reta[int(len(sc_reta) * 0.50)])
     else:
-        idx_sc = int(np.where(tel.s >= 4220)[0][0])
-
+        sc_all = np.where(tel.mguk_state == 'SUPERCLIP')[0]
+        idx_sc = int(sc_all[int(len(sc_all) * 0.50)]) if len(sc_all) > 0 else int(np.where(tel.s >= 1220)[0][0])
     # 2. Heavy braking (into Descida do Lago T4 or Bico de Pato T10)
     br_indices = np.where((tel.brake_pct >= 80.0) & (tel.s >= 1310) & (tel.s <= 2800))[0]
     if len(br_indices) > 0:

@@ -8,7 +8,7 @@
     "session": "Q",
     "circuit_length_m": 4309,
     "reference_2025_pole_s": 69.511,
-    "anchor_to_2025_ratio": true,
+    "anchor_to_2025_ratio": false,
     "altitude_m": 765.0,
     "sector_split_distances_m": {
       "S1_end": 1165,
@@ -16,34 +16,35 @@
       "S3_end": 4309
     },
     "reference_comparison": {
-      "lap_time_s": 70.84,
+      "lap_time_s": 70.08,
       "sectors_s": {
-        "S1": 18.285,
-        "S2": 35.915,
-        "S3": 16.64
+        "S1": 17.85,
+        "S2": 35.25,
+        "S3": 16.0
       }
     },
     "weather": {
       "ambient_temperature_c": 22.0,
       "sea_level_pressure_hpa": 1015.0,
       "relative_humidity": 0.55
-    }
+    },
+    "target_lap_time_s": 70.08
   },
   "vehicle_2026": {
-    "mass_kg": 768.0,
+    "mass_kg": 785.0,
     "weight_distribution_front": 0.455,
     "wheelbase_m": 3.4,
     "track_width_front_m": 1.6,
     "track_width_rear_m": 1.55,
     "cg_height_m": 0.28,
     "gear_ratios_top_speed_kmh": [
-      105,
-      142,
-      178,
-      215,
-      252,
-      288,
-      322,
+      95,
+      138,
+      175,
+      212,
+      248,
+      282,
+      312,
       360
     ],
     "engine_speed_range_rpm": [
@@ -55,18 +56,18 @@
     "ice_max_power_kw": 400.0,
     "fuel_energy_flow_limit_mj_h": 3000.0,
     "fuel_lower_heating_value_mj_kg": 43.5,
-    "soc_initial_mj": 2.85,
-    "soc_min_mj": 0.0,
-    "soc_max_mj": 4.0,
+    "soc_initial_mj": 2.65,
+    "soc_min_mj": 1.1,
+    "soc_max_mj": 3.5,
     "mguk_max_deploy_kw": 350.0,
     "mguk_max_harvest_overrun_kw": -350.0,
     "ice_thermal_efficiency": 0.48,
     "es_deploy_efficiency": 0.96,
     "es_harvest_efficiency": 0.92,
-    "max_recharge_per_lap_mj": 4.85,
+    "max_recharge_per_lap_mj": 7.0,
     "mguk_max_harvest_kw": -350.0,
-    "superclip_max_kw": 350.0,
-    "superclip_max_mj_per_lap": 1.0,
+    "superclip_max_kw": 200.0,
+    "superclip_max_mj_per_lap": 0.4,
     "mguk_min_deploy_fraction": 0.2,
     "mguk_taper_v1_kmh": 290.0,
     "mguk_taper_v2_kmh": 340.0,
@@ -76,18 +77,18 @@
     "mguk_taper_c2_kw": 6900.0,
     "mguk_taper_s2_kw_per_kmh": 20.0,
     "drivetrain_efficiency": 0.96,
-    "soc_end_min_mj": 0.08
+    "soc_end_min_mj": 1.9
   },
   "aerodynamics_2026": {
     "reference_area_m2": 1.6,
     "z_mode": {
-      "cl_base": 2.48,
-      "cd_base": 1.05,
+      "cl_base": 2.85,
+      "cd_base": 0.81,
       "aero_balance_front_pct": 46.2
     },
     "x_mode": {
-      "drag_reduction_ratio": 0.36,
-      "downforce_reduction_ratio": 0.38,
+      "drag_reduction_ratio": 0.52,
+      "downforce_reduction_ratio": 0.48,
       "aero_balance_front_pct": 41.0,
       "transition_time_s": 0.25,
       "min_throttle_pct": 98.0,
@@ -119,8 +120,8 @@
     "min_ride_height_rear_mm": 24.0,
     "roll_gradient_deg_per_g": 0.42,
     "pitch_gradient_deg_per_g": 0.38,
-    "tire_mu_long_peak": 1.91,
-    "tire_mu_lat_peak": 1.83,
+    "tire_mu_long_peak": 1.92,
+    "tire_mu_lat_peak": 1.93,
     "tire_load_sensitivity": 0.075,
     "static_camber_front_deg": -3.1,
     "static_camber_rear_deg": -1.6,

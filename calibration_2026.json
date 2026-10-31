@@ -1,9 +1,9 @@
 {
   "parameters": {
-    "cl_scale": 1.0086701356125554,
-    "cd_scale": 1.003668314633687,
-    "grip_scale": 1.105851789849185,
-    "power_scale": 0.9909954522798213
+    "cl_scale": 1.0,
+    "cd_scale": 1.06,
+    "grip_scale": 1.0,
+    "power_scale": 1.0
   },
   "in_sample": {
     "austria": {

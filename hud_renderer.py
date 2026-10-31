@@ -426,7 +426,7 @@ class BroadcastHUDRenderer:
 
         if idx >= 1:
             xs = x1 + (s_arr / s_max) * (x2 - x1)
-            ys_ice = y2 - ((np.clip(self.telemetry.ice_power_kw[:idx + 1], -400.0, 450.0) + 400.0) / 850.0) * (y2 - y1)
+            ys_ice = y2 - ((np.clip(self.telemetry.ice_power_kw[:idx + 1], 0.0, 450.0) + 400.0) / 850.0) * (y2 - y1)
             ctx.set_source_rgb(*_hex_to_rgb_norm("#6E6B64"))
             ctx.set_line_width(1.9)
             ctx.move_to(xs[0], ys_ice[0])
@@ -452,7 +452,7 @@ class BroadcastHUDRenderer:
                 ctx.line_to(xs[k], ys_mguk[k])
                 ctx.stroke()
 
-        py_ice = y2 - ((np.clip(float(sample["ice_power_kw"]), -400.0, 450.0) + 400.0) / 850.0) * (y2 - y1)
+        py_ice = y2 - ((np.clip(float(sample["ice_power_kw"]), 0.0, 450.0) + 400.0) / 850.0) * (y2 - y1)
         py_mguk = y2 - ((np.clip(float(sample["mguk_power_kw"]), -400.0, 450.0) + 400.0) / 850.0) * (y2 - y1)
         ctx.set_source_rgb(*_hex_to_rgb_norm("#5A5852"))
         ctx.arc(px_curr, py_ice, 2.8, 0, 2 * math.pi)

@@ -51,22 +51,15 @@ def compute_air_density(cfg: Dict[str, Any]) -> float:
 
 
 def mguk_max_deploy_kw(v_kmh: float, pu: Dict[str, Any]) -> float:
-    """MGU-K deployment limit vs speed (350 kW up to 290 km/h, then the FIA linear taper to 0 at 345 km/h)."""
+    """MGU-K deployment limit vs speed: 350 kW up to 290 km/h, then FIA linear taper to 0 at 345 km/h."""
     p_max = float(pu.get("mguk_max_deploy_kw", 350.0))
     v1 = float(pu.get("mguk_taper_v1_kmh", 290.0))
-    v2 = float(pu.get("mguk_taper_v2_kmh", 340.0))
     v3 = float(pu.get("mguk_taper_v3_kmh", 345.0))
-    c1 = float(pu.get("mguk_taper_c1_kw", 1800.0))
-    s1 = float(pu.get("mguk_taper_s1_kw_per_kmh", 5.0))
-    c2 = float(pu.get("mguk_taper_c2_kw", 6900.0))
-    s2 = float(pu.get("mguk_taper_s2_kw_per_kmh", 20.0))
-    if v_kmh < v1:
+    if v_kmh <= v1:
         return p_max
-    if v_kmh < v2:
-        return max(0.0, min(p_max, c1 - s1 * v_kmh))
-    if v_kmh < v3:
-        return max(0.0, c2 - s2 * v_kmh)
-    return 0.0
+    if v_kmh >= v3:
+        return 0.0
+    return max(0.0, p_max * (1.0 - (v_kmh - v1) / (v3 - v1)))
 
 
 def auto_straight_mask(s: np.ndarray, kappa: np.ndarray, k_thr: float = 0.0022, min_len_m: float = 280.0) -> np.ndarray:
@@ -383,10 +376,15 @@ class LapModel:
                 dep[i] = 0.0
             else:
                 p_crank = max(0.0, f_req) * vc / 1000.0 / self.eta_dt
-                if info.plim[i]:
-                    harv[i] = min(hmax, float(pu.get("superclip_max_kw", hmax)))   # harvest at full throttle (0 = no superclip)
-                else:
+                # Superclipping is strictly gated to the end of the two straights before braking
+                is_sc_zone = ((self.s[i] >= 125.0) and (self.s[i] <= 185.0)) or ((1225.0 <= self.s[i] <= 1285.0))
+                is_sc_eligible = is_sc_zone and (self.absk[i] < 0.002) and (self.xmask[i] > 0.4)
+                if info.plim[i] and is_sc_eligible:
+                    harv[i] = min(hmax, float(pu.get("superclip_max_kw", 200.0)))
+                elif not info.plim[i]:
                     harv[i] = max(0.0, min(hmax, self.ice_kw - p_crank))
+                else:
+                    harv[i] = 0.0
                 dep[i] = mguk_max_deploy_kw(vc * 3.6, pu)
         harv[n - 1], dep[n - 1], brk[n - 1] = harv[n - 2], dep[n - 2], brk[n - 2]
         return harv, dep, brk
@@ -489,7 +487,10 @@ def optimise_energy(
         for _ in range(8):
             info = model.solve(list(p_cur))
             harv, dep, brk = model.node_capacities(info)
-            sc_mask = [bool(a) and not b for a, b in zip(list(info.plim) + [info.plim[-1]], brk)]
+            sc_mask = [
+                bool(info.plim[idx]) and (not brk[idx]) and (((model.s[idx] >= 125.0) and (model.s[idx] <= 185.0)) or ((1225.0 <= model.s[idx] <= 1285.0))) and (model.absk[idx] < 0.002)
+                for idx in range(model.n)
+            ]
             soc, rech, dep_e, p_eff = soc_trace(model, list(p_cur), info.dt + [info.dt[-1]], harv, soc0, soc_max, soc_min,
                                                 eta_d, eta_h, rech_max, sc_mask, sc_max)
             if float(np.max(np.abs(np.array(p_eff) - p_cur))) < 0.5:
@@ -557,7 +558,10 @@ def optimise_energy(
         rech_row = np.concatenate([np.zeros(J), dt_j * eta_h / 1000.0])[None, :]
         extra_A, extra_b = [], []
         if sc_max is not None:
-            sc_nodes = np.array([(1.0 if (pl and not bk) else 0.0) for pl, bk in zip(list(info.plim) + [info.plim[-1]], brk)])
+            sc_nodes = np.array([
+                (1.0 if (pl and not bk and (((model.s[idx] >= 125.0) and (model.s[idx] <= 185.0)) or ((1225.0 <= model.s[idx] <= 1285.0))) and (model.absk[idx] < 0.002)) else 0.0)
+                for idx, (pl, bk) in enumerate(zip(list(info.plim) + [info.plim[-1]], brk))
+            ])
             sc_dt_j = block_sum(dts * sc_nodes)
             extra_A.append(np.concatenate([np.zeros(J), sc_dt_j * eta_h / 1000.0])[None, :])
             extra_b.append(np.array([sc_max]))

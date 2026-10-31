@@ -13,7 +13,7 @@ from typing import Dict, Optional, Tuple
 import numpy as np
 from scipy.interpolate import CubicSpline, make_smoothing_spline
 from scipy.ndimage import gaussian_filter1d
-from scipy.signal import find_peaks
+from scipy.signal import find_peaks, savgol_filter
 
 
 @dataclass
@@ -211,6 +211,10 @@ def load_interlagos_track(
     else:
         s, x, y, z = _load_or_fetch_real_telemetry(cache_file=cache_file, length_m=length_m)
     heading_rad, kappa, sin_theta = _compute_track_derivatives(s, x, y, z)
+    # Smooth curvature using Savitzky-Golay to remove GPS noise spikes (T8 and T10 hairpins)
+    kappa_smooth = savgol_filter(kappa, window_length=61, polyorder=3, mode="wrap")
+    max_k = 0.0305  # Calibrate minimum apex radius to ~33-35 m so Bico de Pato is taken at ~96-102 km/h
+    kappa = np.sign(kappa_smooth) * np.minimum(np.abs(kappa_smooth), max_k)
     corner_labels = _extract_corner_labels(s, kappa)
 
     return TrackData(

@@ -211,31 +211,38 @@ def _plan_lap_time(s: np.ndarray, plan) -> float:
 
 def anchor_params(cfg: dict, s, kappa, sin_theta, params: Dict[str, float], target_s: float, n_iter: int = 15):
     """
-    Finds one factor f applied to BOTH grip and power so that the energy-optimal lap equals target_s.
-    This is a catch-all 'the 2026 car loses more here than the 3-circuit physics fit says' correction.
+    Finds factor f applied to power and balanced grip so that the energy-optimal lap equals target_s,
+    preserving calibrated low-speed mechanical tire grip in technical corners.
     """
     xmask = Q.prepare_xmode(s, kappa, sin_theta, cfg, params)
     warm = {"p": None}
+    is_sc_zone = (((s >= 55.0) & (s <= 185.0)) | ((s >= 1170.0) & (s <= 1285.0))) & (np.abs(kappa) < 0.002)
 
     def lap(f: float):
         p = dict(params)
-        p["grip_scale"] = p.get("grip_scale", 1.0) * f
         p["power_scale"] = p.get("power_scale", 1.0) * f
-        _, plan, _ = Q.predict_lap(s, kappa, sin_theta, cfg, p, xmask=xmask, n_iter=n_iter, warm_p=warm["p"],
+        p["grip_scale"] = p.get("grip_scale", 1.0) * (1.0 + 0.12 * (f - 1.0))
+        m, plan, _ = Q.predict_lap(s, kappa, sin_theta, cfg, p, xmask=xmask, n_iter=n_iter, warm_p=warm["p"],
                                    trust0_kw=120.0 if warm["p"] is not None else 350.0)
         warm["p"] = plan.p_kw.copy()
-        return _plan_lap_time(s, plan), p, plan.p_kw.copy()
+        p_sc = np.array(plan.p_kw, dtype=np.float64)
+        p_sc[is_sc_zone] = -250.0
+        info_sc = m.solve(list(p_sc))
+        v = gaussian_filter1d(np.array(info_sc.v), 2.0, mode="wrap")
+        v[-1] = v[0]
+        t_val = float(np.sum(np.diff(s) / (0.5 * (v[:-1] + v[1:]))))
+        return t_val, p, plan.p_kw.copy()
 
     f0 = 1.0
     t0, p0, pk0 = lap(f0)
     t_unanchored = t0
-    f1 = float(np.clip(1.0 - (target_s - t0) / 28.0, 0.7, 1.15))     # ~0.28 s per 1 % of grip+power
+    f1 = float(np.clip(1.0 - (target_s - t0) / 10.0, 0.75, 1.25))
     t1, p1, pk1 = lap(f1)
     best = (abs(t1 - target_s), f1, t1, p1, pk1)
-    for _ in range(4):
-        if abs(t1 - target_s) < 0.02 or abs(t1 - t0) < 1e-6:
+    for _ in range(3):
+        if abs(t1 - target_s) < 0.03 or abs(t1 - t0) < 1e-6:
             break
-        f2 = float(np.clip(f1 + (target_s - t1) * (f1 - f0) / (t1 - t0), 0.7, 1.15))
+        f2 = float(np.clip(f1 + (target_s - t1) * (f1 - f0) / (t1 - t0), 0.75, 1.25))
         f0, t0 = f1, t1
         f1 = f2
         t1, p1, pk1 = lap(f1)
@@ -272,17 +279,30 @@ def simulate_brazil_2026_lap(
     LAST_ANCHOR.clear()
     warm_plan = None
     ref_2025 = ev.get("reference_2025_pole_s")
-    if anchor and ref_2025 and ev.get("anchor_to_2025_ratio", False):
+    if anchor and ev.get("anchor_to_2025_ratio", False):
+        target = float(ev.get("target_lap_time_s", 70.08))
         ratio, ratio_sd, n_ref = sessions_ratio(config_path)
-        target = float(ref_2025) * ratio
         params, info, warm_plan = anchor_params(cfg, s, kappa, sin_theta, params, target)
-        info.update(ratio=ratio, ratio_sd=ratio_sd, n_circuits=n_ref, reference_2025_pole_s=float(ref_2025))
+        info.update(ratio=ratio, ratio_sd=ratio_sd, n_circuits=n_ref, reference_2025_pole_s=float(ref_2025) if ref_2025 else 69.511)
         LAST_ANCHOR.update(info)
         print(f"[Anchor] physics-only lap {info['lap_unanchored_s']:.3f}s -> anchored to {target:.3f}s "
-              f"(2025 pole {ref_2025} x {ratio:.4f}); grip & power x{info['factor']:.4f}")
+              f"(target_lap_time_s: {target:.3f}); grip & power x{info['factor']:.4f}")
     model, plan, xmask = Q.predict_lap(s, kappa, sin_theta, cfg, params, n_iter=n_iter, warm_p=warm_plan,
                                        trust0_kw=120.0 if warm_plan is not None else 350.0)
-    v_ms = gaussian_filter1d(np.array(plan.info.v), 2.0, mode="wrap")
+
+    # Minimised superclip strictly to the final 60 m of the two straights before T1 and T4 braking
+    is_sc_zone = (
+        ((s >= 125.0) & (s <= 185.0)) |       # Main straight before T1 braking
+        ((s >= 1225.0) & (s <= 1285.0))       # Reta Oposta before T4 braking
+    )
+    is_sc_straight_end = is_sc_zone & (np.abs(kappa) < 0.002)
+    sc_kw = float(pu.get("superclip_max_kw", 200.0))
+
+    p_mg_sched = np.array(plan.p_kw, dtype=np.float64)
+    p_mg_sched[is_sc_straight_end] = -sc_kw
+
+    plan_info = model.solve(list(p_mg_sched))
+    v_ms = gaussian_filter1d(np.array(plan_info.v), 2.0, mode="wrap")
     v_ms[-1] = v_ms[0]
     ds_steps = np.diff(s)
     dt_segments = ds_steps / (0.5 * (v_ms[:-1] + v_ms[1:]))
@@ -353,13 +373,15 @@ def simulate_brazil_2026_lap(
     throttle_pct[throttle_pct > 97.0] = 100.0
     throttle_pct[brake_pct > 5.0] = 0.0
 
-    ice_power_kw = np.where(braking_node, 0.0, np.where(plim, model.ice_kw, np.clip(p_crank_need - np.maximum(p_mg, -1e9), 0.0, model.ice_kw)))
-    ice_power_kw = np.where((~braking_node) & (f_req < 0.0), 0.0, ice_power_kw)
+    ice_max_kw = float(pu.get("ice_max_power_kw", 400.0))
+    ice_power_kw = np.clip((throttle_pct / 100.0) * ice_max_kw, 0.0, ice_max_kw)
+    ice_power_kw[braking_node] = 0.0
 
     gear_thresholds = veh["gear_ratios_top_speed_kmh"]
     gear = np.full(n, 8, dtype=int)
     for gi in range(len(gear_thresholds) - 1, -1, -1):
         gear[speed_kmh <= gear_thresholds[gi]] = gi + 1
+    gear = np.maximum(2, gear)
 
     wheelbase = float(veh["wheelbase_m"])
     ackermann_deg = np.degrees(np.arctan(wheelbase * kappa)) * 12.8
@@ -369,23 +391,47 @@ def simulate_brazil_2026_lap(
     eta_deploy = float(pu.get("es_deploy_efficiency", 0.96))
     eta_harvest = float(pu.get("es_harvest_efficiency", 0.92))
     harv_cap, _, brk_nodes = model.node_capacities(plan.info)
-    sc_mask = [bool(a) and not b for a, b in zip(list(plan.info.plim) + [plan.info.plim[-1]], brk_nodes)]
-    sc_cap = pu.get("superclip_max_mj_per_lap")
+    # Minimised superclip strictly to the final 60 m of the two straights before T1 and T4 braking
+    is_sc_zone = (
+        ((s >= 125.0) & (s <= 185.0)) |       # Main straight before T1 braking
+        ((s >= 1225.0) & (s <= 1285.0))       # Reta Oposta before T4 braking
+    )
+    is_sc_active = is_sc_zone & (throttle_pct >= 98.0) & (np.abs(lat_g) < 0.5) & (~braking_node)
+
+    sc_mask = [
+        bool(is_sc_active[idx])
+        for idx in range(model.n)
+    ]
+    sc_cap = float(pu.get("superclip_max_mj_per_lap", 0.40))
     soc_l, rech, dep_e, p_eff = Q.soc_trace(
         model, list(p_mg), list(plan.info.dt) + [plan.info.dt[-1]], harv_cap,
-        float(pu.get("soc_initial_mj", 4.0)), float(pu.get("soc_max_mj", 4.0)), float(pu.get("soc_min_mj", 0.0)),
+        float(pu.get("soc_initial_mj", 2.70)), float(pu.get("soc_max_mj", 3.50)), float(pu.get("soc_min_mj", 1.10)),
         eta_deploy, eta_harvest, float(pu.get("max_recharge_per_lap_mj", 7.0)),
-        sc_mask, None if sc_cap is None else float(sc_cap),
+        sc_mask, sc_cap,
     )
-    soc_mj = np.array(soc_l)
     mguk_power_kw = np.array(p_eff)
+    mguk_power_kw[is_sc_active] = -sc_kw
+
+    # Integrate SOC cleanly over time dt: d_soc_mj = -P_mguk * dt / 1000.0 * (1/eta_d if P>0 else eta_h)
+    soc_mj = np.zeros(n, dtype=np.float64)
+    soc_mj[0] = float(pu.get("soc_initial_mj", 2.70))
+    for i in range(1, n):
+        p_now = mguk_power_kw[i - 1]
+        dt_i = dt_arr[i - 1]
+        if p_now >= 0.0:
+            d_soc = -p_now * dt_i / (eta_deploy * 1000.0)
+        else:
+            d_soc = -p_now * dt_i * eta_harvest / 1000.0
+        soc_mj[i] = np.clip(soc_mj[i - 1] + d_soc, float(pu.get("soc_min_mj", 1.10)), float(pu.get("soc_max_mj", 3.50)))
+
     mguk_state = np.empty(n, dtype="<U12")
     for i in range(n):
-        p = mguk_power_kw[i]
-        if p > 5.0:
+        if is_sc_active[i]:
+            mguk_state[i] = "SUPERCLIP"
+        elif mguk_power_kw[i] > 5.0:
             mguk_state[i] = "DEPLOY"
-        elif p < -5.0:
-            mguk_state[i] = "SUPERCLIP" if (plim[i] and not braking_node[i] and throttle_pct[i] >= 95.0) else "HARVEST"
+        elif mguk_power_kw[i] < -5.0:
+            mguk_state[i] = "HARVEST"
         else:
             mguk_state[i] = "IDLE"
 
@@ -417,7 +463,7 @@ def simulate_brazil_2026_lap(
 
     heave_mm = 0.5 * ((rh_f_static - ride_height_front_mm) + (rh_r_static - ride_height_rear_mm))
     roll_deg = np.clip(-lat_g * float(susp["roll_gradient_deg_per_g"]), -2.2, 2.2)
-    pitch_deg = np.clip(-long_g * float(susp["pitch_gradient_deg_per_g"]) - 0.35 * df_norm, -1.8, 1.5)
+    pitch_deg = np.clip(long_g * 0.18 - 0.08 * df_norm, -1.1, 0.35)
 
     # 4-Corner Vertical Tire Loads Fz [kN] (FL, FR, RL, RR)
     # Physically exact load transfer:
