@@ -498,6 +498,7 @@ def optimise_energy(
     best_t = info.t
     history = [best_t]
     trust = trust0_kw
+    small_gain = 0
 
     for it in range(n_iter):
         g = np.array(model.gradient(info, list(p_node)) + [0.0])
@@ -517,28 +518,29 @@ def optimise_energy(
         S_plus = -cum @ e_dep
         S_minus = cum @ e_har
         S = np.hstack([S_plus, S_minus])                      # SOC_j - soc0 = S x
-        A_ub = [S, -S, S[-1:] * -1.0]
-        b_ub = [np.full(J, soc_max - margin - soc0), np.full(J, soc0 - (soc_min + margin)), np.array([soc0 - soc_end_min - margin])]
-        # recharge limit
-        rech_row = np.concatenate([np.zeros(J), dt_j * eta_h / 1000.0])[None, :]
-        A_ub.append(rech_row)
-        b_ub.append(np.array([rech_max - 0.02]))
-        # trust region on net power
+        # trust-region rows
         I = np.eye(J)
-        A_ub.append(np.hstack([I, -I]))
-        b_ub.append(p0_j + trust)
-        A_ub.append(np.hstack([-I, I]))
-        b_ub.append(-(p0_j - trust))
+        tr_A = [np.hstack([I, -I]), np.hstack([-I, I])]
+        tr_b = [p0_j + trust, -(p0_j - trust)]
         bounds = [(0.0, float(max(0.0, d))) for d in dbound] + [(0.0, float(max(0.0, h))) for h in hbound]
-        res = linprog(c, A_ub=np.vstack(A_ub), b_ub=np.concatenate(b_ub), bounds=bounds, method="highs")
+        rech_row = np.concatenate([np.zeros(J), dt_j * eta_h / 1000.0])[None, :]
+        res = None
+        # the current plan can sit exactly on the SOC limits (clamped), so the safety margin is relaxed if the LP
+        # has no feasible point inside the trust region
+        for mrg in (margin, 0.005, 0.0, -0.03):
+            A_ub = [S, -S, S[-1:] * -1.0, rech_row] + tr_A
+            b_ub = [np.full(J, soc_max - mrg - soc0), np.full(J, soc0 - (soc_min + mrg)),
+                    np.array([soc0 - soc_end_min - mrg]), np.array([rech_max - 0.02])] + tr_b
+            res = linprog(c, A_ub=np.vstack(A_ub), b_ub=np.concatenate(b_ub), bounds=bounds, method="highs")
+            if res.status == 0:
+                break
         if res.status != 0:
             trust *= 0.5
             continue
         p_new_j = res.x[:J] - res.x[J:]
         accepted = False
-        for alpha in (1.0, 0.5, 0.25, 0.1):
-            p_try_j = p0_j + alpha * (p_new_j - p0_j)
-            p_try = p_try_j[blk]
+        for alpha in (1.0, 0.5, 0.25, 0.1, 0.05, 0.02):
+            p_try = p_node + alpha * (p_new_j - p0_j)[blk]        # delta on the node-level plan (keeps its fine structure)
             inf2, h2, d2, b2, soc2, rech2, de2, peff2, feas2 = evaluate(p_try)
             if feas2 and inf2.t < best_t - 1e-5:
                 accepted = True
@@ -550,13 +552,19 @@ def optimise_energy(
             history.append(best_t)
             if verbose:
                 print(f"   iter {it:2d}: T={best_t:.4f}  trust={trust:.0f}  alpha={alpha}  recharge={rech:.2f}  dep_el={dep_e:.2f}  socmin={min(soc):.2f}")
+            if alpha >= 1.0:
+                trust = min(trust0_kw, trust * 1.5)          # full step worked: let the trust region recover
             if gain < 2e-4:
-                trust *= 0.5
-                if trust < 8.0:
+                small_gain += 1
+                if small_gain >= 3:
                     break
+            else:
+                small_gain = 0
         else:
+            if verbose:
+                print(f"   iter {it:2d}: rejected (LP status {res.status}, pred. step {np.abs(p_new_j - p0_j).max():.0f} kW, last trial T={inf2.t:.4f} vs {best_t:.4f}, feasible={feas2}) trust={trust:.0f}")
             trust *= 0.5
-            if trust < 8.0:
+            if trust < 3.0:
                 break
 
     return EnergyPlan(p_kw=np.array(p_node), info=info, soc=np.array(soc), recharge_mj=rech, deploy_elec_mj=dep_e, history=history)
