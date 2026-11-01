@@ -564,11 +564,18 @@ def simulate_brazil_2026_lap(
 
     is_power_lim = (plim & ~braking_node).astype(np.float64)
     is_grip_lim = 1.0 - is_power_lim
-    ds_km = np.gradient(s) / 1000.0
+    ds_km = np.concatenate([[0.0], np.diff(s) / 1000.0])
     limited_power_km = np.cumsum(is_power_lim * ds_km)
     limited_grip_km = np.cumsum(is_grip_lim * ds_km)
 
-    # ---- sensitivities: the FULL pipeline (incl. energy re-optimisation) with one parameter perturbed -------
+    # ---- sensitivities: partial derivatives evaluated at fixed optimal MGU-K deployment schedule ----
+    base_model_sens = Q.make_model(s, kappa, sin_theta, cfg, params, xmask=xmask)
+    base_info_sens = base_model_sens.solve(list(plan.p_kw))
+    v_base_sens = gaussian_filter1d(np.array(base_info_sens.v), 2.0, mode="wrap")
+    v_base_sens[-1] = v_base_sens[0]
+    t_scale_sens = float(t[-1]) / float(np.sum(ds_steps / (0.5 * (v_base_sens[:-1] + v_base_sens[1:]))))
+    t_base_sens = np.concatenate([[0.0], np.cumsum(ds_steps / (0.5 * (v_base_sens[:-1] + v_base_sens[1:])))]) * t_scale_sens
+
     perturbations = {
         "Power +10 kW":    {"power_offset_kw": 10.0},
         "Downforce +1%":   {"cl_scale": float(params.get("cl_scale", 1.0)) * 1.01},
@@ -583,11 +590,12 @@ def simulate_brazil_2026_lap(
             continue
         p2 = dict(params)
         p2.update(delta)
-        _, plan2, _ = Q.predict_lap(s, kappa, sin_theta, cfg, p2, xmask=xmask, n_iter=10, warm_p=plan.p_kw, trust0_kw=80.0)
-        v2 = gaussian_filter1d(np.array(plan2.info.v), 2.0, mode="wrap")
+        m2 = Q.make_model(s, kappa, sin_theta, cfg, p2, xmask=xmask)
+        info2 = m2.solve(list(plan.p_kw))
+        v2 = gaussian_filter1d(np.array(info2.v), 2.0, mode="wrap")
         v2[-1] = v2[0]
-        t2 = np.concatenate([[0.0], np.cumsum(ds_steps / (0.5 * (v2[:-1] + v2[1:])))])
-        sensitivity_deltas_s[label] = t2 - t
+        t2 = np.concatenate([[0.0], np.cumsum(ds_steps / (0.5 * (v2[:-1] + v2[1:])))]) * t_scale_sens
+        sensitivity_deltas_s[label] = t2 - t_base_sens
 
     return TelemetryResult(
         s=s, t=t, dt_ds=dt_ds, speed_kmh=speed_kmh, speed_ms=v_ms, long_g=long_g, lat_g=lat_g, total_g=total_g,
@@ -619,3 +627,6 @@ if __name__ == "__main__":
     print(f"Fuel {res.fuel_used_kg[-1]:.3f} kg | recovered {res.energy_total_recovered_mj[-1]:.2f} MJ "
           f"(overrun {res.energy_overrun_mj[-1]:.2f}, part {res.energy_part_throttle_mj[-1]:.2f}, superclip {res.energy_superclip_mj[-1]:.2f}) "
           f"| SOC {res.soc_mj[0]:.2f} -> {res.soc_mj[-1]:.2f} (min {res.soc_mj.min():.2f})")
+    sens_dict = {k: round(float(v[-1]), 3) for k, v in res.sensitivity_deltas_s.items()}
+    print(f"Sensitivities: {sens_dict}")
+    print(f"Limited power: {res.limited_power_km[-1]:.3f} km, Limited grip: {res.limited_grip_km[-1]:.3f} km, Sum: {res.limited_power_km[-1] + res.limited_grip_km[-1]:.3f} km")
