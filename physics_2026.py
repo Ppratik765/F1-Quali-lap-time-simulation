@@ -407,7 +407,7 @@ def simulate_brazil_2026_lap(
     gear = np.full(n, 8, dtype=int)
     for gi in range(len(gear_thresholds) - 1, -1, -1):
         gear[speed_kmh <= gear_thresholds[gi]] = gi + 1
-    gear = np.maximum(2, gear)
+    gear = np.maximum(1, gear)
 
     wheelbase = float(veh["wheelbase_m"])
     ackermann_deg = np.degrees(np.arctan(wheelbase * kappa)) * 12.8

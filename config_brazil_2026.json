@@ -38,7 +38,7 @@
     "track_width_rear_m": 1.55,
     "cg_height_m": 0.28,
     "gear_ratios_top_speed_kmh": [
-      95,
+      100,
       138,
       175,
       212,
@@ -64,7 +64,7 @@
     "ice_thermal_efficiency": 0.48,
     "es_deploy_efficiency": 0.96,
     "es_harvest_efficiency": 0.92,
-    "max_recharge_per_lap_mj": 7.0,
+    "max_recharge_per_lap_mj": 6.5,
     "mguk_max_harvest_kw": -350.0,
     "superclip_max_kw": 0.0,
     "superclip_max_mj_per_lap": 0.0,

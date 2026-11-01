@@ -82,6 +82,19 @@ def auto_straight_mask(s: np.ndarray, kappa: np.ndarray, k_thr: float = 0.0022, 
             i = j
         else:
             i += 1
+    # Circular circuit wrap-around check across timing line (s = 4309 -> s = 0)
+    if flat[0] and flat[-1]:
+        j_start = 0
+        while j_start < n and flat[j_start]:
+            j_start += 1
+        i_end = n - 1
+        while i_end >= 0 and flat[i_end]:
+            i_end -= 1
+        i_end += 1
+        wrap_len = (s[j_start - 1] - s[0]) + (s[-1] - s[i_end])
+        if wrap_len >= min_len_m:
+            mask[0:j_start] = 1.0
+            mask[i_end:n] = 1.0
     return mask
 
 
@@ -518,12 +531,11 @@ def optimise_energy(
 
     s_j = np.arange(J) * block_m
     dts_init = np.array(info.dt + [info.dt[-1]])
-    harv_brk = np.array([h if b else 0.0 for h, b in zip(harv, brk)])
-    rech_phys_est = float(np.sum(harv_brk * dts_init * eta_h / 1000.0)) + (sc_max if sc_max is not None else 0.0) + 0.35
+    harv_arr = np.array(harv)
+    rech_phys_est = float(np.sum(harv_arr * dts_init * eta_h / 1000.0))
     rech_max = min(rech_max, rech_phys_est)
-    if mdf > 0.0:
-        straight_blocks = (s_j <= 220.0) | ((s_j >= 720.0) & (s_j <= 1300.0)) | (s_j >= 3300.0)
-        forced = straight_blocks & (block_mean(np.array(dep)) > 30.0)
+    straight_blocks = (s_j <= 220.0) | ((s_j >= 720.0) & (s_j <= 1300.0)) | (s_j >= 3400.0)
+    forced = straight_blocks & (block_mean(np.array(dep)) > 30.0) if mdf > 0.0 else None
 
     converged = False
     phase_it = 0
@@ -537,7 +549,7 @@ def optimise_energy(
         p0_j = block_mean(p_node)
 
         # variables x = [p_plus (J), p_minus (J)]
-        c = np.concatenate([G_j, -G_j])
+        c = np.concatenate([G_j, -G_j - 0.015 * (dt_j * eta_h / 1000.0)])
         # SOC(j) = soc0 - cumsum(pplus*dt/(eta_d*1000)) + cumsum(pminus*dt*eta_h/1000)
         cum = np.tril(np.ones((J, J)))
         e_dep = np.diag(dt_j / (eta_d * 1000.0))
