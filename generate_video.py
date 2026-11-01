@@ -224,6 +224,7 @@ def main() -> None:
             )
 
         if args.full:
+            export_diagnostic_frames(tel, car_renderer, hud_renderer)
             target_fps = getattr(args, 'fps', 60)
             out_filename = "brazil_2026_quali_1080p60.mp4" if target_fps == 60 else f"brazil_2026_quali_1080p{target_fps}.mp4"
             render_video_pipe(

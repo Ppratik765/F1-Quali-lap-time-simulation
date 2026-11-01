@@ -296,10 +296,10 @@ class F1XRayCarRenderer:
         df_kg = float(sample["downforce_kg"])
         df_len = float(np.clip(0.24 + 0.00032 * df_kg, 0.24, 0.68))
         M_df = self._local_to_world_matrix(
-            dx=0.05,
-            dy=-0.14,
-            dz=0.58 + heave_m,
-            scale_xyz=(0.56, 0.56, df_len),
+            dx=-0.10,
+            dy=0.0,
+            dz=0.84 + heave_m + df_len,
+            scale_xyz=(0.70, 0.70, df_len),
         )
         self.actor_arrow_downforce.user_matrix = M_df
 
