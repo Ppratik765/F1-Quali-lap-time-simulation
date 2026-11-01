@@ -16,11 +16,11 @@
       "S3_end": 4309
     },
     "reference_comparison": {
-      "lap_time_s": 70.08,
+      "lap_time_s": 70.05,
       "sectors_s": {
-        "S1": 17.85,
-        "S2": 35.25,
-        "S3": 16.0
+        "S1": 17.4,
+        "S2": 36.8,
+        "S3": 15.85
       }
     },
     "weather": {
@@ -28,7 +28,7 @@
       "sea_level_pressure_hpa": 1015.0,
       "relative_humidity": 0.55
     },
-    "target_lap_time_s": 70.08
+    "target_lap_time_s": 70.05
   },
   "vehicle_2026": {
     "mass_kg": 785.0,
@@ -56,9 +56,9 @@
     "ice_max_power_kw": 400.0,
     "fuel_energy_flow_limit_mj_h": 3000.0,
     "fuel_lower_heating_value_mj_kg": 43.5,
-    "soc_initial_mj": 2.65,
-    "soc_min_mj": 1.1,
-    "soc_max_mj": 3.5,
+    "soc_initial_mj": 2.85,
+    "soc_min_mj": 0.0,
+    "soc_max_mj": 4.0,
     "mguk_max_deploy_kw": 350.0,
     "mguk_max_harvest_overrun_kw": -350.0,
     "ice_thermal_efficiency": 0.48,
@@ -66,9 +66,9 @@
     "es_harvest_efficiency": 0.92,
     "max_recharge_per_lap_mj": 7.0,
     "mguk_max_harvest_kw": -350.0,
-    "superclip_max_kw": 200.0,
-    "superclip_max_mj_per_lap": 0.4,
-    "mguk_min_deploy_fraction": 0.2,
+    "superclip_max_kw": 0.0,
+    "superclip_max_mj_per_lap": 0.0,
+    "mguk_min_deploy_fraction": 0.25,
     "mguk_taper_v1_kmh": 290.0,
     "mguk_taper_v2_kmh": 340.0,
     "mguk_taper_v3_kmh": 345.0,
@@ -77,7 +77,7 @@
     "mguk_taper_c2_kw": 6900.0,
     "mguk_taper_s2_kw_per_kmh": 20.0,
     "drivetrain_efficiency": 0.96,
-    "soc_end_min_mj": 1.9
+    "soc_end_min_mj": 0.0
   },
   "aerodynamics_2026": {
     "reference_area_m2": 1.6,

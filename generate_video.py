@@ -30,13 +30,8 @@ def _find_diagnostic_timestamps(tel: TelemetryResult) -> dict:
       2. frame_02_braking.png   : Heavy braking zone (HARVEST Overrun, -350 kW, nose dive)
       3. frame_03_cornering.png : High-G technical cornering / apex exit
     """
-    # 1. Active SUPERCLIP on Reta Oposta (100% throttle, -250 kW, amber badge)
-    sc_reta = np.where((tel.mguk_state == 'SUPERCLIP') & (tel.s >= 1150) & (tel.s <= 1300))[0]
-    if len(sc_reta) > 0:
-        idx_sc = int(sc_reta[int(len(sc_reta) * 0.50)])
-    else:
-        sc_all = np.where(tel.mguk_state == 'SUPERCLIP')[0]
-        idx_sc = int(sc_all[int(len(sc_all) * 0.50)]) if len(sc_all) > 0 else int(np.where(tel.s >= 1220)[0][0])
+    # 1. Finish line crossing (full speed ~344 km/h, DEPLOY 100 kW, SOC hits 0.0 MJ)
+    idx_sc = len(tel.s) - 2
     # 2. Heavy braking (into Descida do Lago T4 or Bico de Pato T10)
     br_indices = np.where((tel.brake_pct >= 80.0) & (tel.s >= 1310) & (tel.s <= 2800))[0]
     if len(br_indices) > 0:
@@ -216,13 +211,13 @@ def main() -> None:
     try:
         if args.preview:
             export_diagnostic_frames(tel, car_renderer, hud_renderer)
-            # Render 10-second preview covering Reta Oposta Superclip -> T4 Descida do Lago Braking & Cornering -> Ferradura
+            # Render 10-second preview covering the finish straight (Juncao exit -> full power climb -> crossing finish line with SOC hitting 0)
             render_video_pipe(
                 output_path="preview_brazil_2026.mp4",
                 fps=30,
-                t_start=11.0,
-                t_end=21.0,
-                outro_hold_s=0.0,
+                t_start=max(0.0, tel.lap_time_s - 10.0),
+                t_end=tel.lap_time_s,
+                outro_hold_s=1.0,
                 tel=tel,
                 car_renderer=car_renderer,
                 hud_renderer=hud_renderer,
